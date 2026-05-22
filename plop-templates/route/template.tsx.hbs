@@ -1,0 +1,14 @@
+import React from 'react';
+
+// Template is different from Layout in that it will re-mount (run animation/state again) every time you navigate to a different page using this template
+export default function {{pascalCase name}}Template({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 ease-in-out">
+      {children}
+    </div>
+  );
+}

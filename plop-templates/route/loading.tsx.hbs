@@ -1,0 +1,11 @@
+import React from 'react';
+import { Loader2 } from 'lucide-react';
+
+export default function {{pascalCase name}}Loading() {
+  return (
+    <div className="flex items-center justify-center w-full h-full min-h-[200px]">
+      <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      <span className="sr-only">Loading...</span>
+    </div>
+  );
+}
