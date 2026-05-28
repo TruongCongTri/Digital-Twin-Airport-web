@@ -1,32 +1,27 @@
 // Root Layout: Header, Footer, Font, Providers
 import type { Metadata } from "next";
-import { Space_Grotesk, Inter } from "next/font/google";
+import { Inter, Geist } from "next/font/google";
 import "./globals.css";
-import { Header } from "@/components/layouts/Header";
-import Footer from "@/components/layouts/Footer";
-import NextTopLoader from "nextjs-toploader";
 import { env } from "@/lib/env";
+import { cn } from "@/lib/utils";
+import { CustomCursor } from "@/src/components/CustomCursor";
+import { Toaster } from "@/components/ui/sonner";
 
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  variable: "--font-sans",
-});
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 // config-6 -  Base Metadata & OpenGraph
 export const metadata: Metadata = {
   metadataBase: new URL(env.NEXT_PUBLIC_URL),
   title: {
-    default: "Boilerplate Next.js 13", // Trang chủ sẽ có title này
-    template: "%s | Boilerplate Next.js 13", // Khi trang con cài title "Khóa React", nó sẽ ra "Khóa React | Boilerplate Next.js 13"
+    default: "AeroTwin — Airport Digital Twin", // Trang chủ sẽ có title này
+    template: "%s |  ", // Khi trang con cài title "Khóa React", nó sẽ ra "Khóa React | Boilerplate Next.js 13"
   },
-  description:
-    "Boilerplate Next.js 13 with TypeScript, Tailwind CSS, React Query, and more.",
+  description: "Real-time 3D digital twin dashboard for airport operations.",
   openGraph: {
     type: "website",
     locale: "vi_VN",
     url: env.NEXT_PUBLIC_URL,
-    siteName: "Boilerplate Next.js 13",
+    siteName: "Airport Digital Twin",
     images: [{ url: "/images/default-og-cover.jpg", width: 1200, height: 630 }],
   },
 };
@@ -37,22 +32,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="vi" className={`${spaceGrotesk.variable} ${inter.variable}`}>
-      <body className="bg-background text-foreground font-sans min-h-screen flex flex-col">
-        <NextTopLoader
-          color="#BA0027"
-          initialPosition={0.08}
-          crawlSpeed={200}
-          height={3}
-          crawl={true}
-          showSpinner={false}
-          easing="ease"
-          speed={200}
-        />
-        {/* Sẽ bọc ReactQueryProvider ở đây trong thực tế */}
-        <Header />
-        <main className="flex-1 flex flex-col">{children}</main>
-        <Footer />
+    <html
+      lang="en"
+      className={cn("h-full", "antialiased", "font-sans", geist.variable)}
+    >
+      <body className="h-full overflow-hidden">
+        <CustomCursor />
+        {children}
+        <Toaster />
       </body>
     </html>
   );

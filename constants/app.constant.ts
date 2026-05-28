@@ -30,6 +30,8 @@ export const APP_CONFIG = {
   },
   // Future modules:
   // COURSE: { MAX_VIDEO_SIZE_MB: 500 }
+
+  COORDINATE: { Y: 10.773641336829593, X: 107.04036041678714 },
 };
 
 // Defines OTP delivery channels
