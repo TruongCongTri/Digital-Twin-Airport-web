@@ -8,6 +8,8 @@ import { CustomCursor } from "@/src/components/CustomCursor";
 import { Toaster } from "@/components/ui/sonner";
 import { AppBootstrapper } from "@/src/components/AppBootstrapper";
 
+export const dynamic = "force-dynamic";
+
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 // config-6 -  Base Metadata & OpenGraph

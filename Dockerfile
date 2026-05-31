@@ -17,13 +17,14 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Set environment variables for the build
+# Add these two lines so Next.js knows where the backend is during build!
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-# Force 4GB of RAM allocation for the build
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
-# Run the build
 RUN npm run build
 
 # ==========================================
