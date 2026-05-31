@@ -9,7 +9,7 @@
     "lint": "eslint",
     "prepare": "husky",
     "generate": "plop",
-    "install:ci": "npm ci --no-audit --no-fund"
+    "install:ci": "npm ci --no-audit --no-fund --ignore-scripts"
   },
   "dependencies": {
     "@arcgis/core": "^5.0.19",
