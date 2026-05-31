@@ -1,14 +1,10 @@
 "use client";
-import {
-  useMemo,
-  useState,
-  ElementType,
-  ReactNode,
-  useEffect,
-  useRef,
-} from "react";
+import { useMemo, useState, ElementType, ReactNode, useEffect } from "react";
 import { BentoPanel, BentoBox } from "@/src/components/panels/BentoPanel";
 import { useAirportStore } from "@/src/store/airport-store";
+
+// Note: To optimize build times, ensure `optimizePackageImports: ['lucide-react']`
+// is present in your next.config.js file.
 import {
   LayoutDashboard,
   BarChart3,
@@ -24,6 +20,7 @@ import {
   Clock,
   Zap,
 } from "lucide-react";
+
 import {
   PieChart,
   Pie,
@@ -42,6 +39,7 @@ import {
   ReferenceLine,
   Legend,
 } from "recharts";
+
 import {
   Table,
   TableBody,
@@ -223,41 +221,29 @@ export function AirportDashboard() {
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
-  const storePlanes = useAirportStore((state) => state.planes);
-  const storeSensors = useAirportStore((state) => state.sensors);
-  const storeMetrics = useAirportStore((state) => state.metrics);
-  const storeHistoricalData = useAirportStore((state) => state.historicalData);
-
-  const latestRef = useRef({
-    planes: storePlanes,
-    sensors: storeSensors,
-    metrics: storeMetrics,
-    historicalData: storeHistoricalData,
+  // ✅ PERFORMANCE FIX: Removed reactive Zustand subscriptions to prevent 60FPS re-renders
+  const [throttledData, setThrottledData] = useState(() => {
+    const state = useAirportStore.getState();
+    return {
+      planes: state.planes,
+      sensors: state.sensors,
+      metrics: state.metrics,
+      historicalData: state.historicalData,
+      lastUpdated: Date.now(),
+    };
   });
 
-  useEffect(() => {
-    latestRef.current = {
-      planes: storePlanes,
-      sensors: storeSensors,
-      metrics: storeMetrics,
-      historicalData: storeHistoricalData,
-    };
-  }, [storePlanes, storeSensors, storeMetrics, storeHistoricalData]);
-
-  const [throttledData, setThrottledData] = useState(() => ({
-    planes: storePlanes,
-    sensors: storeSensors,
-    metrics: storeMetrics,
-    historicalData: storeHistoricalData,
-    lastUpdated: Date.now(),
-  }));
-
+  // ✅ Imperative sync interval decoupled from map frame updates
   useEffect(() => {
     if (!isDashboardOpen) return;
 
     const syncData = () => {
+      const state = useAirportStore.getState();
       setThrottledData({
-        ...latestRef.current,
+        planes: state.planes,
+        sensors: state.sensors,
+        metrics: state.metrics,
+        historicalData: state.historicalData,
         lastUpdated: Date.now(),
       });
     };

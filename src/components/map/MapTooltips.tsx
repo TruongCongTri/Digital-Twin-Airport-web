@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Plane, Sensor } from "@/types";
 import { useAirportStore } from "@/src/store/airport-store";
@@ -132,6 +132,27 @@ export function MapTooltips() {
   const sensors = useAirportStore((state) => state.sensors);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
+  // ✅ PERFORMANCE FIX: O(1) Lookup Maps to prevent N^2 operations during panning
+  const planesMap = useMemo(() => {
+    return planes.reduce(
+      (acc, plane) => {
+        acc[plane.id] = plane;
+        return acc;
+      },
+      {} as Record<string, Plane>,
+    );
+  }, [planes]);
+
+  const sensorsMap = useMemo(() => {
+    return sensors.reduce(
+      (acc, sensor) => {
+        acc[sensor.id] = sensor;
+        return acc;
+      },
+      {} as Record<string, Sensor>,
+    );
+  }, [sensors]);
+
   return (
     <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
       <AnimatePresence>
@@ -144,7 +165,7 @@ export function MapTooltips() {
           })
           .map((t) => {
             if (t.entityType === "plane") {
-              const plane = planes.find((p) => p.id === t.entityId);
+              const plane = planesMap[t.entityId]; // Instant lookup
               if (!plane) return null;
               return (
                 <PlaneTooltip
@@ -155,7 +176,7 @@ export function MapTooltips() {
                 />
               );
             } else if (t.entityType === "sensor") {
-              const sensor = sensors.find((s) => s.id === t.entityId);
+              const sensor = sensorsMap[t.entityId]; // Instant lookup
               if (!sensor) return null;
               return (
                 <SensorTooltip

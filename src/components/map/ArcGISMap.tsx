@@ -1,7 +1,14 @@
 // partial heatmap
 "use client";
 import { useAirportStore } from "@/src/store/airport-store";
-import { useEffect, useRef, useCallback, useState, ElementType } from "react";
+import {
+  useEffect,
+  useRef,
+  useCallback,
+  useState,
+  ElementType,
+  useMemo,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Layers,
@@ -58,6 +65,7 @@ const BASEMAP_OPTIONS: BasemapOption[] = [
   { id: "satellite", label: "Satellite Imagery 3D", icon: Globe },
 ];
 
+// ✅ PERFORMANCE FIX: Extracted constants outside of component loops
 const AIRBORNE_STATUSES = [
   "AIRBORNE",
   "EN_ROUTE",
@@ -68,6 +76,10 @@ const AIRBORNE_STATUSES = [
   "DEPARTED",
   "SCHEDULED",
 ];
+const HOME_ORIGINS = ["SGN", "VVTS", "HO CHI MINH", "LONG THANH"];
+const OUTBOUND_STATUSES = ["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"];
+const INBOUND_STATUSES = ["APPROACHING", "LANDED"];
+const GROUND_STATUSES = ["TAXIING", "PUSHBACK", "LANDED"];
 
 const isPlaneOnGround = (plane: Plane) => {
   const status = (plane.status || "").toUpperCase();
@@ -186,16 +198,21 @@ export function ArcGISMap() {
   const mapFilters = useAirportStore((state) => state.mapFilters);
   const toggleMapFilter = useAirportStore((state) => state.toggleMapFilter);
 
-  const filterKeys = Object.keys(mapFilters);
-  const sensorKeys = filterKeys.filter((k) => k !== "planes");
-  const allSensorsVisible = sensorKeys.every((k) => mapFilters[k]);
+  // ✅ PERFORMANCE FIX: Memoize array operations so they don't run 60 times a second
+  const filterKeys = useMemo(() => Object.keys(mapFilters), [mapFilters]);
+  const sensorKeys = useMemo(
+    () => filterKeys.filter((k) => k !== "planes"),
+    [filterKeys],
+  );
+  const allSensorsVisible = useMemo(
+    () => sensorKeys.every((k) => mapFilters[k]),
+    [sensorKeys, mapFilters],
+  );
 
   const handleToggleAllSensors = () => {
     const targetState = !allSensorsVisible;
     sensorKeys.forEach((k) => {
-      if (mapFilters[k] !== targetState) {
-        toggleMapFilter(k);
-      }
+      if (mapFilters[k] !== targetState) toggleMapFilter(k);
     });
   };
 
@@ -293,6 +310,7 @@ export function ArcGISMap() {
     let destroyed = false;
     let watchHandle: WatchHandle | null = null;
     let handleMapReset: () => void;
+    let rAFId: number;
 
     const init = async () => {
       const [
@@ -516,7 +534,6 @@ export function ArcGISMap() {
       };
       window.addEventListener("reset-map-view", handleMapReset);
 
-      let rAFId: number;
       watchHandle = reactiveUtils.watch(
         () => view?.camera,
         () => {
@@ -526,28 +543,25 @@ export function ArcGISMap() {
               syncTooltips(view);
 
               const cameraHeading = view.camera.heading || 0;
+
+              // ✅ PERFORMANCE FIX: Build dictionary once per frame for O(1) lookup
+              const currentPlanes = useAirportStore.getState().planes;
+              const planeMap = new Map(currentPlanes.map((p) => [p.id, p]));
+
               planeLayerRef.current?.graphics.forEach((g) => {
-                const plane = useAirportStore
-                  .getState()
-                  .planes.find((p) => p.id === g.attributes.id);
+                const plane = planeMap.get(g.attributes.id);
                 if (plane && g.symbol) {
                   const statusStr = (plane.status || "UNKNOWN").toUpperCase();
                   const originStr = (plane.origin || "").toUpperCase();
-                  const isHomeOrigin = [
-                    "SGN",
-                    "VVTS",
-                    "HO CHI MINH",
-                    "LONG THANH",
-                  ].some((kw) => originStr.includes(kw));
+
+                  // ✅ PERFORMANCE FIX: using the extracted constant array
+                  const isHomeOrigin = HOME_ORIGINS.some((kw) =>
+                    originStr.includes(kw),
+                  );
 
                   let isOutbound = false;
-                  if (
-                    ["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"].includes(
-                      statusStr,
-                    )
-                  )
-                    isOutbound = true;
-                  else if (["APPROACHING", "LANDED"].includes(statusStr))
+                  if (OUTBOUND_STATUSES.includes(statusStr)) isOutbound = true;
+                  else if (INBOUND_STATUSES.includes(statusStr))
                     isOutbound = false;
                   else isOutbound = isHomeOrigin;
 
@@ -575,6 +589,7 @@ export function ArcGISMap() {
     init();
     return () => {
       destroyed = true;
+      cancelAnimationFrame(rAFId); // ✅ PERFORMANCE FIX: Prevent memory leak of rAF
       if (watchHandle) watchHandle.remove();
       if (handleMapReset)
         window.removeEventListener("reset-map-view", handleMapReset);
@@ -583,9 +598,9 @@ export function ArcGISMap() {
         viewRef.current = null;
       }
     };
-  }, []);
+  }, [currentBasemap, syncTooltips, selectEntity]);
 
-  // ✅ CAMERA ZOOM CONTROLLER (Dives to selected sensors or planes)
+  // ✅ CAMERA ZOOM CONTROLLER
   useEffect(() => {
     if (!isMapReady || !viewRef.current || isImmersiveActive) return;
 
@@ -613,11 +628,17 @@ export function ArcGISMap() {
         );
       }
     }
-  }, [selectedEntityId, selectedEntityType, isImmersiveActive, isMapReady]);
+  }, [
+    selectedEntityId,
+    selectedEntityType,
+    isImmersiveActive,
+    isMapReady,
+    focusedSensor,
+    planes,
+  ]);
 
   // ✅ IMMERSIVE NATIVE 3D HEATMAP ENGINE
   useEffect(() => {
-    // 1. Ensure map is ready and required modules are loaded
     if (
       !isMapReady ||
       !FeatureLayerRef.current ||
@@ -634,19 +655,11 @@ export function ArcGISMap() {
       if (footprintLayerRef.current) footprintLayerRef.current.visible = true;
 
       const targetType = focusedSensor.type;
-
-      // ✅ FIX: Ensure we are pulling the most recent sensor data from the store
       const allSensors = useAirportStore.getState().sensors;
       const relevantSensors = allSensors.filter(
         (s) => s.type === targetType && getLon(s) !== 0,
       );
 
-      // Debugging: If this log is empty, check your API/Store data
-      console.log(
-        `Heatmap rendering ${relevantSensors.length} sensors for ${targetType}`,
-      );
-
-      // Toggle off 3D building models
       const map = mapInstanceRef.current;
       if (map && map.basemap) {
         const toggleBuildings = (
@@ -667,12 +680,9 @@ export function ArcGISMap() {
         toggleBuildings(map.basemap.referenceLayers, false);
       }
 
-      // Cleanup existing
-      if (heatmapLayerRef.current) {
+      if (heatmapLayerRef.current)
         mapInstanceRef.current?.remove(heatmapLayerRef.current);
-      }
 
-      // Setup Geometry Masks (Terminal vs Tarmac)
       const isTarmac =
         targetType === "TARMAC_TEMP" || targetType === "WIND_OUTDOOR";
       const BLUEPRINT_TERMINAL = [
@@ -723,7 +733,6 @@ export function ArcGISMap() {
       );
       maskLayerRef.current.visible = true;
 
-      // Add heatmap graphics
       const graphics = relevantSensors.map((s, i) => {
         const coords = getOffsetCoords(s);
         return new GraphicRef.current!({
@@ -736,7 +745,6 @@ export function ArcGISMap() {
         });
       });
 
-      // Render
       const layer = new FeatureLayerRef.current!({
         source: graphics,
         title: "Immersive Heatmap",
@@ -762,22 +770,16 @@ export function ArcGISMap() {
       heatmapLayerRef.current = layer;
       mapInstanceRef.current?.add(layer);
 
-      // Camera: Frame the entire area, not just one sensor
       const targetGeometry = new PolygonRef.current!({
         rings: [targetBlueprint],
         spatialReference: { wkid: 4326 },
       });
 
       viewRef.current?.goTo(
-        {
-          target: targetGeometry,
-          tilt: 50,
-          zoom: isTarmac ? 15.5 : 16.5,
-        },
+        { target: targetGeometry, tilt: 50, zoom: isTarmac ? 15.5 : 16.5 },
         { duration: 1500, easing: "ease-in-out" },
       );
     } else {
-      // Cleanup when exiting immersive mode
       if (footprintLayerRef.current) footprintLayerRef.current.visible = false;
       if (maskLayerRef.current) maskLayerRef.current.visible = false;
 
@@ -806,7 +808,6 @@ export function ArcGISMap() {
         heatmapLayerRef.current = null;
       }
     }
-    // ✅ ADDED `sensors` TO DEPENDENCIES to ensure re-render on data update
   }, [isImmersiveActive, focusedSensor?.type, isMapReady, sensors]);
 
   // ✅ SENSOR LOOP: Draws the 3D WebGL Cylinders (ISOLATION APPLIED)
@@ -841,9 +842,8 @@ export function ArcGISMap() {
       );
     });
 
-    if (toRemove.length > 0) {
+    if (toRemove.length > 0)
       sensorLayerRef.current.removeMany(toRemove.toArray());
-    }
 
     sensors.forEach((sensor) => {
       const isAnotherSelected =
@@ -854,7 +854,6 @@ export function ArcGISMap() {
 
       const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
       const dynamicHeight = Math.max(colProps.height, 10);
-
       const coords = getOffsetCoords(sensor);
 
       const symbol3D = new PointSymbol3DClass({
@@ -879,7 +878,6 @@ export function ArcGISMap() {
           latitude: coords.lat,
           spatialReference: { wkid: 4326 },
         });
-
         existingGraphic.symbol = symbol3D;
       } else {
         sensorLayerRef.current!.add(
@@ -910,7 +908,7 @@ export function ArcGISMap() {
     selectedEntityType,
   ]);
 
-  // PLANES LOOP
+  // ✅ PLANES LOOP
   useEffect(() => {
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
@@ -949,15 +947,13 @@ export function ArcGISMap() {
 
       const statusStr = (plane.status || "UNKNOWN").toUpperCase();
       const originStr = (plane.origin || "").toUpperCase();
-      const isHomeOrigin = ["SGN", "VVTS", "HO CHI MINH", "LONG THANH"].some(
-        (kw) => originStr.includes(kw),
-      );
+
+      // ✅ PERFORMANCE FIX: using the extracted constant array
+      const isHomeOrigin = HOME_ORIGINS.some((kw) => originStr.includes(kw));
 
       let isOutbound = false;
-      if (["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"].includes(statusStr))
-        isOutbound = true;
-      else if (["APPROACHING", "LANDED"].includes(statusStr))
-        isOutbound = false;
+      if (OUTBOUND_STATUSES.includes(statusStr)) isOutbound = true;
+      else if (INBOUND_STATUSES.includes(statusStr)) isOutbound = false;
       else isOutbound = isHomeOrigin;
 
       const planeGeom = new PointClass({
@@ -1026,9 +1022,8 @@ export function ArcGISMap() {
         }
       }
 
-      const isMovingOnGround = ["TAXIING", "PUSHBACK", "LANDED"].includes(
-        plane.status,
-      );
+      // ✅ PERFORMANCE FIX: Extract constant strings check
+      const isMovingOnGround = GROUND_STATUSES.includes(statusStr);
       const isAtGroundLevel = plane.altitude < 50;
       const isValidCoordinate = getLon(plane) !== 0 && getLat(plane) !== 0;
 

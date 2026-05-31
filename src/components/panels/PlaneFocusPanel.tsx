@@ -2,6 +2,7 @@
 import { BentoPanel, BentoBox } from "./BentoPanel";
 import { useAirportStore } from "@/src/store/airport-store";
 import { PlaneStatus } from "@/types";
+import { useMemo } from "react";
 import {
   Plane,
   Navigation,
@@ -124,10 +125,15 @@ export function PlaneFocusPanel() {
   const clearSelection = useAirportStore((state) => state.clearSelection);
   const plane = useAirportStore((state) => state.getSelectedPlane());
 
+  // ✅ PERFORMANCE FIX: Memoize the index calculation to stop finding the index 60 times a second
   const totalPlanes = useAirportStore((state) => state.planes.length);
-  const currentIndex = useAirportStore((state) =>
-    plane ? state.planes.findIndex((p) => p.id === plane.id) : -1,
-  );
+  const planeId = plane?.id; // Extract the primitive first
+
+  const currentIndex = useMemo(() => {
+    return planeId
+      ? useAirportStore.getState().planes.findIndex((p) => p.id === planeId)
+      : -1;
+  }, [planeId]); // React compiler is happy, strictly depends on the string ID
 
   if (!isDashboardOpen || !plane) return null;
 
@@ -142,6 +148,7 @@ export function PlaneFocusPanel() {
       altitude: plane.altitude || 0,
     })) || [];
 
+  // ✅ PERFORMANCE FIX: Avoid reading Zustand context array in render loop
   const handlePrev = () => {
     const planes = useAirportStore.getState().planes;
     const prevIndex = currentIndex <= 0 ? totalPlanes - 1 : currentIndex - 1;

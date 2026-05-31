@@ -653,36 +653,25 @@ export function SensorFocusPanel() {
     (state) => state.setImmersiveActive,
   );
 
-  const rawHistoricalData = useAirportStore((state) => state.historicalData);
-  const rawAiForecasts = useAirportStore((state) => state.aiForecasts);
-  const rawSensors = useAirportStore((state) => state.sensors);
-
-  const latestRef = useRef({
-    history: rawHistoricalData,
-    forecasts: rawAiForecasts,
-    sensors: rawSensors,
-  });
-
-  useEffect(() => {
-    latestRef.current = {
-      history: rawHistoricalData,
-      forecasts: rawAiForecasts,
-      sensors: rawSensors,
+  // ✅ PERFORMANCE FIX: Decoupled historical arrays from rendering loop
+  const [throttledHeavy, setThrottledHeavy] = useState(() => {
+    const state = useAirportStore.getState();
+    return {
+      history: state.historicalData,
+      forecasts: state.aiForecasts,
+      sensors: state.sensors,
+      lastUpdated: Date.now(),
     };
-  }, [rawHistoricalData, rawAiForecasts, rawSensors]);
-
-  const [throttledHeavy, setThrottledHeavy] = useState(() => ({
-    history: rawHistoricalData,
-    forecasts: rawAiForecasts,
-    sensors: rawSensors,
-    lastUpdated: Date.now(),
-  }));
+  });
 
   useEffect(() => {
     if (!isDashboardOpen) return;
     const syncData = () => {
+      const state = useAirportStore.getState();
       setThrottledHeavy({
-        ...latestRef.current,
+        history: state.historicalData,
+        forecasts: state.aiForecasts,
+        sensors: state.sensors,
         lastUpdated: Date.now(),
       });
     };
@@ -707,10 +696,15 @@ export function SensorFocusPanel() {
     return fallbackTime;
   }, [history, fallbackTime]);
 
+  // ✅ PERFORMANCE FIX: Calculate index only when the selected sensor ID changes
   const totalSensors = useAirportStore((state) => state.sensors.length);
-  const currentIndex = useAirportStore((state) =>
-    sensor ? state.sensors.findIndex((s) => s.id === sensor.id) : -1,
-  );
+  const sensorId = sensor?.id; // Extract the primitive first
+
+  const currentIndex = useMemo(() => {
+    return sensorId
+      ? useAirportStore.getState().sensors.findIndex((s) => s.id === sensorId)
+      : -1;
+  }, [sensorId]); // React compiler is happy, strictly depends on the string ID
 
   const typeStr = String(sensor?.type || "UNKNOWN");
   const isTilt = typeStr.includes("TILT");
@@ -957,6 +951,7 @@ export function SensorFocusPanel() {
     );
   }
 
+  // ✅ PERFORMANCE FIX: Avoid reading Zustand context array in render loop
   const handlePrev = () => {
     const sensors = useAirportStore.getState().sensors;
     selectEntity(
