@@ -97,7 +97,6 @@ const FauxBarcode = ({ className = "h-6" }: { className?: string }) => (
   </div>
 );
 
-// 5-Min Sync Badge
 const SyncBadge = ({ className = "" }: { className?: string }) => (
   <div
     className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-widest shadow-sm z-10 ${className}`}
@@ -106,7 +105,6 @@ const SyncBadge = ({ className = "" }: { className?: string }) => (
   </div>
 );
 
-// REUSABLE BRIEFING DOSSIER CARD
 interface BriefingCardProps {
   title: string;
   tag: string;
@@ -172,7 +170,6 @@ const BriefingCard = ({
   );
 };
 
-// RUBBER STAMP COMPONENT
 const RubberStamp = ({
   text,
   type = "neutral",
@@ -200,13 +197,7 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
   const chartData = data.map((v, i) => ({ i, v }));
   return (
     <div className="h-10 w-24 opacity-80 relative" data-cursor="crosshair">
-      <ResponsiveContainer
-        width="100%"
-        height="100%"
-        minWidth={0}
-        minHeight={0}
-        debounce={50}
-      >
+      <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={chartData}>
           <defs>
             <linearGradient id={`grad-${color}`} x1="0" y1="0" x2="0" y2="1">
@@ -232,8 +223,6 @@ export function AirportDashboard() {
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
-  // DASHBOARD THROTTLING ENGINE (5 MINUTE POLLING)
-  // Completely decouples all heavy tables and charts from the 100ms WebSocket
   const storePlanes = useAirportStore((state) => state.planes);
   const storeSensors = useAirportStore((state) => state.sensors);
   const storeMetrics = useAirportStore((state) => state.metrics);
@@ -260,7 +249,7 @@ export function AirportDashboard() {
     sensors: storeSensors,
     metrics: storeMetrics,
     historicalData: storeHistoricalData,
-    lastUpdated: Date.now(), // Pure because it only runs once on mount
+    lastUpdated: Date.now(),
   }));
 
   useEffect(() => {
@@ -269,12 +258,12 @@ export function AirportDashboard() {
     const syncData = () => {
       setThrottledData({
         ...latestRef.current,
-        lastUpdated: Date.now(), // ✅ PURE: Allowed inside effects!
+        lastUpdated: Date.now(),
       });
     };
 
-    syncData(); // Sync immediately on open
-    const interval = setInterval(syncData, 300000); // 300,000ms = 5 minutes
+    syncData();
+    const interval = setInterval(syncData, 300000);
 
     return () => clearInterval(interval);
   }, [isDashboardOpen]);
@@ -312,7 +301,6 @@ export function AirportDashboard() {
       .map((k) => ({ name: k, count: airlineCounts[k] }))
       .sort((a, b) => b.count - a.count);
 
-    // Force exactly 20 data points so the chart canvas is always full
     const DATA_POINTS = 20;
     const data: TimeDataPoint[] = [];
     const activeGroundPlanes = planes.filter((p) =>
@@ -342,7 +330,7 @@ export function AirportDashboard() {
         } else {
           sum += s.currentValue;
           count++;
-        } // Fallback to current live value if history is missing
+        }
       }
       return count ? sum / count : 0;
     };
@@ -407,7 +395,6 @@ export function AirportDashboard() {
 
   return (
     <>
-      {/* --- LEFT PANEL: System Overview & Snapshots --- */}
       <BentoPanel
         direction="left"
         isOpen={showDashboard}
@@ -553,13 +540,7 @@ export function AirportDashboard() {
             footerText="RATIO"
           >
             <div className="h-20 w-full relative -ml-4" data-cursor="crosshair">
-              <ResponsiveContainer
-                minWidth={0}
-                minHeight={0}
-                width="100%"
-                height="100%"
-                debounce={50}
-              >
+              <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={planeStatuses}
@@ -592,13 +573,7 @@ export function AirportDashboard() {
             footerText="RATIO"
           >
             <div className="h-20 w-full relative -ml-4" data-cursor="crosshair">
-              <ResponsiveContainer
-                minWidth={0}
-                minHeight={0}
-                width="100%"
-                height="100%"
-                debounce={50}
-              >
+              <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={[
@@ -641,8 +616,6 @@ export function AirportDashboard() {
         </div>
       </BentoPanel>
 
-      {/* --- RIGHT PANEL: Standard View (Live Directory) --- */}
-      {/* ✅ FIXED WIDTH: w-[420px] */}
       {viewMode === "standard" && (
         <BentoPanel
           direction="right"
@@ -859,8 +832,6 @@ export function AirportDashboard() {
         </BentoPanel>
       )}
 
-      {/* --- RIGHT PANEL: Analytics View (Tabbed Charts) --- */}
-      {/* ✅ FIXED WIDTH: w-[540px] (Provides extra room for grid-cols-2) */}
       {viewMode === "analytics" && (
         <BentoPanel
           direction="right"
@@ -898,7 +869,6 @@ export function AirportDashboard() {
           </BentoBox>
 
           <div className="grid grid-cols-2 gap-4">
-            {/* --- TAB 1: AIR TRAFFIC --- */}
             {analyticsTab === "AIR_TRAFFIC" && (
               <>
                 <div className="col-span-2">
@@ -913,13 +883,7 @@ export function AirportDashboard() {
                       className="h-48 w-full relative -ml-3"
                       data-cursor="crosshair"
                     >
-                      <ResponsiveContainer
-                        minWidth={0}
-                        minHeight={0}
-                        width="100%"
-                        height="100%"
-                        debounce={50}
-                      >
+                      <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={timeData} margin={{ left: -25 }}>
                           <CartesianGrid
                             strokeDasharray="3 3"
@@ -991,13 +955,7 @@ export function AirportDashboard() {
                     className="h-48 w-full relative -ml-3"
                     data-cursor="crosshair"
                   >
-                    <ResponsiveContainer
-                      minWidth={0}
-                      minHeight={0}
-                      width="100%"
-                      height="100%"
-                      debounce={50}
-                    >
+                    <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart
                         data={airlineData.slice(0, 5)}
                         margin={{ left: -25, bottom: 20 }}
@@ -1054,13 +1012,7 @@ export function AirportDashboard() {
                     className="h-48 w-full relative -ml-3"
                     data-cursor="crosshair"
                   >
-                    <ResponsiveContainer
-                      minWidth={0}
-                      minHeight={0}
-                      width="100%"
-                      height="100%"
-                      debounce={50}
-                    >
+                    <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={timeData} margin={{ left: -25 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis
@@ -1108,7 +1060,6 @@ export function AirportDashboard() {
               </>
             )}
 
-            {/* --- TAB 2: GROUND OPS --- */}
             {analyticsTab === "GROUND_OPS" && (
               <>
                 <div className="col-span-2">
@@ -1123,13 +1074,7 @@ export function AirportDashboard() {
                       className="h-48 w-full relative -ml-3"
                       data-cursor="crosshair"
                     >
-                      <ResponsiveContainer
-                        minWidth={0}
-                        minHeight={0}
-                        width="100%"
-                        height="100%"
-                        debounce={50}
-                      >
+                      <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={timeData} margin={{ left: -25 }}>
                           <CartesianGrid
                             strokeDasharray="3 3"
@@ -1209,13 +1154,7 @@ export function AirportDashboard() {
                   footerText="EVALUATED"
                 >
                   <div className="h-48 w-full relative -ml-3">
-                    <ResponsiveContainer
-                      minWidth={0}
-                      minHeight={0}
-                      width="100%"
-                      height="100%"
-                      debounce={50}
-                    >
+                    <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={timeData} margin={{ left: -25 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis
@@ -1272,13 +1211,7 @@ export function AirportDashboard() {
                     className="h-48 w-full relative -ml-3"
                     data-cursor="crosshair"
                   >
-                    <ResponsiveContainer
-                      minWidth={0}
-                      minHeight={0}
-                      width="100%"
-                      height="100%"
-                      debounce={50}
-                    >
+                    <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={timeData} margin={{ left: -25 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis
@@ -1338,7 +1271,6 @@ export function AirportDashboard() {
               </>
             )}
 
-            {/* --- TAB 3: ENVIRONMENT --- */}
             {analyticsTab === "ENVIRONMENT" && (
               <>
                 <div className="col-span-2">
@@ -1353,13 +1285,7 @@ export function AirportDashboard() {
                       className="h-48 w-full relative -ml-3"
                       data-cursor="crosshair"
                     >
-                      <ResponsiveContainer
-                        minWidth={0}
-                        minHeight={0}
-                        width="100%"
-                        height="100%"
-                        debounce={50}
-                      >
+                      <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={timeData} margin={{ left: -25 }}>
                           <CartesianGrid
                             strokeDasharray="3 3"
@@ -1433,13 +1359,7 @@ export function AirportDashboard() {
                       className="h-48 w-full relative -ml-3"
                       data-cursor="crosshair"
                     >
-                      <ResponsiveContainer
-                        minWidth={0}
-                        minHeight={0}
-                        width="100%"
-                        height="100%"
-                        debounce={50}
-                      >
+                      <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={timeData} margin={{ left: -25 }}>
                           <CartesianGrid
                             strokeDasharray="3 3"
