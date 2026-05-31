@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "NODE_OPTIONS='--max-old-space-size=4096' next build",
     "start": "next start",
     "lint": "eslint",
     "prepare": "husky",
-    "generate": "plop"
+    "generate": "plop",
+    "install:ci": "npm ci --no-audit --no-fund"
   },
   "dependencies": {
     "@arcgis/core": "^5.0.19",
