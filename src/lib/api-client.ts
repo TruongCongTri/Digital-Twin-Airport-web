@@ -12,7 +12,7 @@ import type {
 } from "@/types";
 
 export const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1",
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
   withCredentials: true,
   timeout: 10000,
 });
