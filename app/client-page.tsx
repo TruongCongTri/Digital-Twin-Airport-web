@@ -5,13 +5,13 @@ import { useAirportStore } from "@/src/store/airport-store";
 import { AirportDashboard } from "@/src/components/dashboard/AirportDashboard";
 import { MapTooltips } from "@/src/components/map/MapTooltips";
 import { PlaneFocusPanel } from "@/src/components/panels/PlaneFocusPanel";
-import { SensorFocusPanel } from "@/src/components/panels/SensorFocusPanel-v2";
+import { SensorFocusPanel } from "@/src/components/panels/SensorFocusPanel";
 import { DashboardToggle } from "@/src/components/DashboardToggle";
 import { TopBar } from "@/src/components/TopBar";
 
 // 1. Delegate the loading state directly to the dynamic map import
 const ArcGISMap = dynamic(
-  () => import("@/src/components/map/ArcGISMap-v4").then((m) => m.ArcGISMap),
+  () => import("@/src/components/map/ArcGISMap").then((m) => m.ArcGISMap),
   {
     ssr: false,
     loading: () => (

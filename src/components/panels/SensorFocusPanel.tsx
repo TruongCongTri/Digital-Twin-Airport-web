@@ -295,7 +295,7 @@ const SpatialHeatmapCard = ({
   const heatmapInstanceRef = useRef<HeatmapInstance | null>(null);
 
   const [isReady, setIsReady] = useState(false);
-  const setImmersiveActive = useAirportStore((s) => s.setImmersiveActive); // ✅ Map Action
+  const setImmersiveActive = useAirportStore((s) => s.setImmersiveActive);
 
   const type = focusedSensor.type;
   const isTarmac = type === "TARMAC_TEMP" || type === "WIND_OUTDOOR";
@@ -464,7 +464,6 @@ const SpatialHeatmapCard = ({
     let animationFrameId: number;
 
     const drawHeatmap = () => {
-      // ✅ SAFETY CHECK: Ensures the ref still exists when this async function fires
       if (!heatmapInstanceRef.current || !containerRef.current) return;
 
       const relevantSensors = allSensors.filter(
@@ -509,7 +508,6 @@ const SpatialHeatmapCard = ({
     drawHeatmap();
 
     const observer = new ResizeObserver(() => {
-      // ✅ Cancel any pending frames to prevent animation stacking
       cancelAnimationFrame(animationFrameId);
       animationFrameId = requestAnimationFrame(drawHeatmap);
     });
@@ -549,7 +547,6 @@ const SpatialHeatmapCard = ({
         <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest flex items-center gap-2">
           Spatial Heatmap: {focusedSensor.type.replace("_", " ")} Topology
         </span>
-        {/* ✅ FIX: View on Map Button */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => setImmersiveActive(true)}
@@ -651,7 +648,6 @@ export function SensorFocusPanel() {
   const clearSelection = useAirportStore((state) => state.clearSelection);
   const sensor = useAirportStore((state) => state.getSelectedSensor());
 
-  // ✅ IMMERSIVE HEATMAP OVERRIDE
   const isImmersiveActive = useAirportStore((state) => state.isImmersiveActive);
   const setImmersiveActive = useAirportStore(
     (state) => state.setImmersiveActive,
@@ -947,7 +943,6 @@ export function SensorFocusPanel() {
 
   if (!isDashboardOpen || !sensor) return null;
 
-  // ✅ IF IMMERSIVE MODE IS ACTIVE, HIDE PANELS AND SHOW "GO BACK" BUTTON
   if (isImmersiveActive) {
     return (
       <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
@@ -1421,6 +1416,12 @@ export function SensorFocusPanel() {
                         x={nowLabel}
                         stroke="#ef4444"
                         strokeDasharray="3 3"
+                        label={{
+                          position: "insideTopLeft",
+                          value: "FORECAST",
+                          fill: "#ef4444",
+                          fontSize: 9,
+                        }}
                       />
                     )}
 

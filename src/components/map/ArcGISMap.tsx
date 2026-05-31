@@ -1,3 +1,4 @@
+// partial heatmap
 "use client";
 import { useAirportStore } from "@/src/store/airport-store";
 import { useEffect, useRef, useCallback, useState, ElementType } from "react";
@@ -26,16 +27,16 @@ import type GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import type EsriMap from "@arcgis/core/Map";
 import type Point from "@arcgis/core/geometry/Point";
 import type Graphic from "@arcgis/core/Graphic";
-import type SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 import type PictureMarkerSymbol from "@arcgis/core/symbols/PictureMarkerSymbol";
 import type Polyline from "@arcgis/core/geometry/Polyline";
 import type SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import type Color from "@arcgis/core/Color";
-import type TextSymbol from "@arcgis/core/symbols/TextSymbol";
 import type FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import type HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import type Polygon from "@arcgis/core/geometry/Polygon";
 import type SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
+import type PointSymbol3D from "@arcgis/core/symbols/PointSymbol3D";
+import type ObjectSymbol3DLayer from "@arcgis/core/symbols/ObjectSymbol3DLayer";
 
 import { Plane, TooltipData } from "@/types";
 import { APP_CONFIG } from "@/constants/app.constant";
@@ -77,7 +78,6 @@ const isPlaneOnGround = (plane: Plane) => {
   return true;
 };
 
-// ✅ Strictly typed interface replaces "any"
 export interface GeographicEntity {
   x?: number;
   y?: number;
@@ -87,13 +87,58 @@ export interface GeographicEntity {
     longitude?: number;
     latitude?: number;
   };
+  type?: string;
 }
 
-// ✅ Bulletproof extractors using the strict type
 const getLon = (entity: GeographicEntity) =>
   entity.x ?? entity.longitude ?? entity.position?.longitude ?? 0;
 const getLat = (entity: GeographicEntity) =>
   entity.y ?? entity.latitude ?? entity.position?.latitude ?? 0;
+
+const SENSOR_DISPERSION_ANGLES: Record<string, number> = {
+  TEMPERATURE: 0,
+  HUMIDITY: 51,
+  CO2: 102,
+  WIND_INDOOR: 153,
+  LIGHT_DENSITY: 204,
+  CAMERA_AI_CROWD: 255,
+  TILT_STRUCTURAL: 306,
+  WIND_OUTDOOR: 0,
+  TARMAC_TEMP: 180,
+};
+
+const getOffsetCoords = (entity: GeographicEntity) => {
+  const baseLon = getLon(entity);
+  const baseLat = getLat(entity);
+  if (!entity.type || !SENSOR_DISPERSION_ANGLES.hasOwnProperty(entity.type)) {
+    return { lon: baseLon, lat: baseLat };
+  }
+  const radius = 0.0004;
+  const angleRad = SENSOR_DISPERSION_ANGLES[entity.type] * (Math.PI / 180);
+  return {
+    lon: baseLon + Math.cos(angleRad) * radius,
+    lat: baseLat + Math.sin(angleRad) * radius,
+  };
+};
+
+const getSensorColumnProps = (type: string, val: number) => {
+  if (type.includes("CO2"))
+    return { color: [239, 68, 68, 0.55], height: val / 10 };
+  if (type.includes("TEMP"))
+    return { color: [234, 179, 8, 0.55], height: val * 1.5 };
+  if (type.includes("HUMIDITY"))
+    return { color: [56, 189, 248, 0.55], height: val };
+  if (type.includes("WIND"))
+    return { color: [6, 182, 212, 0.55], height: val * 10 };
+  if (type.includes("TILT"))
+    return { color: [71, 85, 105, 0.55], height: val * 15000 };
+  if (type.includes("LIGHT"))
+    return { color: [202, 138, 4, 0.55], height: val / 10 };
+  if (type.includes("CROWD"))
+    return { color: [168, 85, 247, 0.55], height: val / 4 };
+  return { color: [156, 163, 175, 0.55], height: 30 };
+};
+
 export function ArcGISMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<SceneView | null>(null);
@@ -104,7 +149,6 @@ export function ArcGISMap() {
   const pathLayerRef = useRef<GraphicsLayer | null>(null);
   const airlineLabelLayerRef = useRef<GraphicsLayer | null>(null);
   const footprintLayerRef = useRef<GraphicsLayer | null>(null);
-
   const maskLayerRef = useRef<GraphicsLayer | null>(null);
   const heatmapLayerRef = useRef<FeatureLayer | null>(null);
 
@@ -112,12 +156,14 @@ export function ArcGISMap() {
   const HeatmapRendererRef = useRef<typeof HeatmapRenderer | null>(null);
   const PointRef = useRef<typeof Point | null>(null);
   const GraphicRef = useRef<typeof Graphic | null>(null);
-  const SimpleMarkerRef = useRef<typeof SimpleMarkerSymbol | null>(null);
+  const PointSymbol3DRef = useRef<typeof PointSymbol3D | null>(null);
+  const ObjectSymbol3DLayerRef = useRef<typeof ObjectSymbol3DLayer | null>(
+    null,
+  );
   const PictureMarkerRef = useRef<typeof PictureMarkerSymbol | null>(null);
   const PolylineRef = useRef<typeof Polyline | null>(null);
   const LineRef = useRef<typeof SimpleLineSymbol | null>(null);
   const ColorRef = useRef<typeof Color | null>(null);
-  const TextSymbolRef = useRef<typeof TextSymbol | null>(null);
   const PolygonRef = useRef<typeof Polygon | null>(null);
   const SimpleFillRef = useRef<typeof SimpleFillSymbol | null>(null);
 
@@ -134,7 +180,6 @@ export function ArcGISMap() {
   const selectedEntityType = useAirportStore(
     (state) => state.selectedEntityType,
   );
-
   const isImmersiveActive = useAirportStore((state) => state.isImmersiveActive);
   const focusedSensor = useAirportStore((state) => state.getSelectedSensor());
 
@@ -168,13 +213,20 @@ export function ArcGISMap() {
     const store = useAirportStore.getState();
     const rawTooltips: TooltipData[] = [];
 
+    const focusedId = store.selectedEntityId;
+    const focusedType = store.selectedEntityType;
+
     if (store.mapFilters["planes"] !== false) {
       store.planes.forEach((plane) => {
         if (!isPlaneOnGround(plane)) return;
+        if (focusedType === "plane" && focusedId && focusedId !== plane.id)
+          return;
+
         const screen = view.toScreen(
           new PointClass({
             longitude: getLon(plane),
             latitude: getLat(plane),
+            z: 15,
             spatialReference: { wkid: 4326 },
           }),
         );
@@ -191,10 +243,20 @@ export function ArcGISMap() {
 
     store.sensors.forEach((sensor) => {
       if (store.mapFilters[sensor.type] === false) return;
+      if (focusedType === "sensor" && focusedId && focusedId !== sensor.id)
+        return;
+
+      const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
+      const dynamicHeight = Math.max(colProps.height, 10);
+      const zElevation = 25 + dynamicHeight;
+
+      const coords = getOffsetCoords(sensor);
+
       const screen = view.toScreen(
         new PointClass({
-          longitude: getLon(sensor),
-          latitude: getLat(sensor),
+          longitude: coords.lon,
+          latitude: coords.lat,
+          z: zElevation,
           spatialReference: { wkid: 4326 },
         }),
       );
@@ -209,7 +271,7 @@ export function ArcGISMap() {
     });
 
     const visibleTooltips: TooltipData[] = [];
-    const COLLISION_RADIUS = 40;
+    const COLLISION_RADIUS = 25;
 
     for (const tooltip of rawTooltips) {
       if (tooltip.entityId === store.selectedEntityId) {
@@ -239,12 +301,12 @@ export function ArcGISMap() {
         { default: GraphicsLayer },
         { default: GraphicClass },
         { default: PointClass },
-        { default: SimpleMarkerClass },
+        { default: PointSymbol3DClass },
+        { default: ObjectSymbol3DLayerClass },
         { default: PictureMarkerClass },
         { default: PolylineClass },
         { default: LineClass },
         { default: ColorClass },
-        { default: TextSymbolClass },
         { default: FeatureLayerClass },
         { default: HeatmapRendererClass },
         { default: PolygonClass },
@@ -256,12 +318,12 @@ export function ArcGISMap() {
         import("@arcgis/core/layers/GraphicsLayer"),
         import("@arcgis/core/Graphic"),
         import("@arcgis/core/geometry/Point"),
-        import("@arcgis/core/symbols/SimpleMarkerSymbol"),
+        import("@arcgis/core/symbols/PointSymbol3D"),
+        import("@arcgis/core/symbols/ObjectSymbol3DLayer"),
         import("@arcgis/core/symbols/PictureMarkerSymbol"),
         import("@arcgis/core/geometry/Polyline"),
         import("@arcgis/core/symbols/SimpleLineSymbol"),
         import("@arcgis/core/Color"),
-        import("@arcgis/core/symbols/TextSymbol"),
         import("@arcgis/core/layers/FeatureLayer"),
         import("@arcgis/core/renderers/HeatmapRenderer"),
         import("@arcgis/core/geometry/Polygon"),
@@ -272,12 +334,12 @@ export function ArcGISMap() {
       if (destroyed) return;
       PointRef.current = PointClass;
       GraphicRef.current = GraphicClass;
-      SimpleMarkerRef.current = SimpleMarkerClass;
+      PointSymbol3DRef.current = PointSymbol3DClass;
+      ObjectSymbol3DLayerRef.current = ObjectSymbol3DLayerClass;
       PictureMarkerRef.current = PictureMarkerClass;
       PolylineRef.current = PolylineClass;
       LineRef.current = LineClass;
       ColorRef.current = ColorClass;
-      TextSymbolRef.current = TextSymbolClass;
       FeatureLayerRef.current = FeatureLayerClass;
       HeatmapRendererRef.current = HeatmapRendererClass;
       PolygonRef.current = PolygonClass;
@@ -311,7 +373,6 @@ export function ArcGISMap() {
       });
       const sensorLayer = new GraphicsLayer({
         title: "Sensors",
-        screenSizePerspectiveEnabled: false,
         elevationInfo: { mode: "relative-to-scene", offset: 25 },
       });
       const labelLayer = new GraphicsLayer({
@@ -437,6 +498,7 @@ export function ArcGISMap() {
           hit.type === "graphic" &&
           hit.graphic.attributes.type !== "label"
         ) {
+          event.stopPropagation();
           selectEntity(hit.graphic.attributes.id, hit.graphic.attributes.type);
         }
       });
@@ -454,47 +516,53 @@ export function ArcGISMap() {
       };
       window.addEventListener("reset-map-view", handleMapReset);
 
+      let rAFId: number;
       watchHandle = reactiveUtils.watch(
         () => view?.camera,
         () => {
           if (!destroyed && view && !view.destroyed) {
-            syncTooltips(view);
+            cancelAnimationFrame(rAFId);
+            rAFId = requestAnimationFrame(() => {
+              syncTooltips(view);
 
-            const cameraHeading = view.camera.heading || 0;
-            planeLayerRef.current?.graphics.forEach((g) => {
-              const plane = useAirportStore
-                .getState()
-                .planes.find((p) => p.id === g.attributes.id);
-              if (plane && g.symbol) {
-                const statusStr = (plane.status || "UNKNOWN").toUpperCase();
-                const originStr = (plane.origin || "").toUpperCase();
-                const isHomeOrigin = [
-                  "SGN",
-                  "VVTS",
-                  "HO CHI MINH",
-                  "LONG THANH",
-                ].some((kw) => originStr.includes(kw));
+              const cameraHeading = view.camera.heading || 0;
+              planeLayerRef.current?.graphics.forEach((g) => {
+                const plane = useAirportStore
+                  .getState()
+                  .planes.find((p) => p.id === g.attributes.id);
+                if (plane && g.symbol) {
+                  const statusStr = (plane.status || "UNKNOWN").toUpperCase();
+                  const originStr = (plane.origin || "").toUpperCase();
+                  const isHomeOrigin = [
+                    "SGN",
+                    "VVTS",
+                    "HO CHI MINH",
+                    "LONG THANH",
+                  ].some((kw) => originStr.includes(kw));
 
-                let isOutbound = false;
-                if (
-                  ["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"].includes(
-                    statusStr,
+                  let isOutbound = false;
+                  if (
+                    ["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"].includes(
+                      statusStr,
+                    )
                   )
-                )
-                  isOutbound = true;
-                else if (["APPROACHING", "LANDED"].includes(statusStr))
-                  isOutbound = false;
-                else isOutbound = isHomeOrigin;
+                    isOutbound = true;
+                  else if (["APPROACHING", "LANDED"].includes(statusStr))
+                    isOutbound = false;
+                  else isOutbound = isHomeOrigin;
 
-                const direction = isOutbound ? "outbound" : "inbound";
-                const baseHeading =
-                  direction === "inbound" ? plane.heading + 180 : plane.heading;
-                const visualHeading = baseHeading - cameraHeading;
+                  const direction = isOutbound ? "outbound" : "inbound";
+                  const baseHeading =
+                    direction === "inbound"
+                      ? plane.heading + 180
+                      : plane.heading;
+                  const visualHeading = baseHeading - cameraHeading;
 
-                const updatedSymbol = g.symbol.clone() as PictureMarkerSymbol;
-                updatedSymbol.angle = visualHeading;
-                g.symbol = updatedSymbol;
-              }
+                  const updatedSymbol = g.symbol.clone() as PictureMarkerSymbol;
+                  updatedSymbol.angle = visualHeading;
+                  g.symbol = updatedSymbol;
+                }
+              });
             });
           }
         },
@@ -517,8 +585,39 @@ export function ArcGISMap() {
     };
   }, []);
 
+  // ✅ CAMERA ZOOM CONTROLLER (Dives to selected sensors or planes)
+  useEffect(() => {
+    if (!isMapReady || !viewRef.current || isImmersiveActive) return;
+
+    if (selectedEntityId && selectedEntityType === "sensor" && focusedSensor) {
+      const coords = getOffsetCoords(focusedSensor);
+      viewRef.current.goTo(
+        {
+          center: [coords.lon, coords.lat],
+          zoom: 19,
+          tilt: 75,
+          heading: 0,
+        },
+        { duration: 1500, easing: "ease-in-out" },
+      );
+    } else if (selectedEntityId && selectedEntityType === "plane") {
+      const plane = planes.find((p) => p.id === selectedEntityId);
+      if (plane) {
+        viewRef.current.goTo(
+          {
+            center: [getLon(plane), getLat(plane)],
+            zoom: 20,
+            tilt: 60,
+          },
+          { duration: 1500, easing: "ease-in-out" },
+        );
+      }
+    }
+  }, [selectedEntityId, selectedEntityType, isImmersiveActive, isMapReady]);
+
   // ✅ IMMERSIVE NATIVE 3D HEATMAP ENGINE
   useEffect(() => {
+    // 1. Ensure map is ready and required modules are loaded
     if (
       !isMapReady ||
       !FeatureLayerRef.current ||
@@ -535,13 +634,21 @@ export function ArcGISMap() {
       if (footprintLayerRef.current) footprintLayerRef.current.visible = true;
 
       const targetType = focusedSensor.type;
-      const relevantSensors = useAirportStore
-        .getState()
-        .sensors.filter((s) => s.type === targetType && getLon(s) !== 0);
 
+      // ✅ FIX: Ensure we are pulling the most recent sensor data from the store
+      const allSensors = useAirportStore.getState().sensors;
+      const relevantSensors = allSensors.filter(
+        (s) => s.type === targetType && getLon(s) !== 0,
+      );
+
+      // Debugging: If this log is empty, check your API/Store data
+      console.log(
+        `Heatmap rendering ${relevantSensors.length} sensors for ${targetType}`,
+      );
+
+      // Toggle off 3D building models
       const map = mapInstanceRef.current;
       if (map && map.basemap) {
-        // ✅ Correctly typed the layers map iteration to satisfy TypeScript
         const toggleBuildings = (
           layers: Collection<Layer>,
           visible: boolean,
@@ -560,13 +667,14 @@ export function ArcGISMap() {
         toggleBuildings(map.basemap.referenceLayers, false);
       }
 
+      // Cleanup existing
       if (heatmapLayerRef.current) {
         mapInstanceRef.current?.remove(heatmapLayerRef.current);
       }
 
+      // Setup Geometry Masks (Terminal vs Tarmac)
       const isTarmac =
         targetType === "TARMAC_TEMP" || targetType === "WIND_OUTDOOR";
-
       const BLUEPRINT_TERMINAL = [
         [107.040861, 10.773008],
         [107.042759, 10.774047],
@@ -592,7 +700,6 @@ export function ArcGISMap() {
         [107.025036, 10.773454],
         [107.064904, 10.8024],
       ];
-
       const targetBlueprint = isTarmac ? BLUEPRINT_TARMAC : BLUEPRINT_TERMINAL;
 
       const outerRing = [
@@ -616,56 +723,20 @@ export function ArcGISMap() {
       );
       maskLayerRef.current.visible = true;
 
+      // Add heatmap graphics
       const graphics = relevantSensors.map((s, i) => {
+        const coords = getOffsetCoords(s);
         return new GraphicRef.current!({
           geometry: new PointRef.current!({
-            longitude: getLon(s),
-            latitude: getLat(s),
+            longitude: coords.lon,
+            latitude: coords.lat,
             spatialReference: { wkid: 4326 },
           }),
           attributes: { ObjectID: i, value: s.currentValue },
         });
       });
 
-      let colorStops = [];
-      if (targetType.includes("CO2") || targetType.includes("HUMIDITY")) {
-        colorStops = [
-          { ratio: 0, color: "rgba(34, 197, 94, 0.4)" },
-          { ratio: 0.3, color: "rgba(34, 197, 94, 0.6)" },
-          { ratio: 0.6, color: "rgba(234, 179, 8, 0.8)" },
-          { ratio: 0.85, color: "rgba(239, 68, 68, 0.9)" },
-          { ratio: 1, color: "rgba(126, 34, 206, 1)" },
-        ];
-      } else if (targetType.includes("WIND")) {
-        colorStops = [
-          { ratio: 0, color: "rgba(207, 250, 254, 0.4)" },
-          { ratio: 0.3, color: "rgba(56, 189, 248, 0.6)" },
-          { ratio: 0.6, color: "rgba(79, 70, 229, 0.8)" },
-          { ratio: 1, color: "rgba(49, 46, 129, 1)" },
-        ];
-      } else if (targetType.includes("CROWD")) {
-        colorStops = [
-          { ratio: 0, color: "rgba(254, 240, 138, 0.4)" },
-          { ratio: 0.3, color: "rgba(249, 115, 22, 0.6)" },
-          { ratio: 0.6, color: "rgba(239, 68, 68, 0.8)" },
-          { ratio: 1, color: "rgba(69, 10, 10, 1)" },
-        ];
-      } else if (targetType.includes("LIGHT")) {
-        colorStops = [
-          { ratio: 0, color: "rgba(66, 32, 6, 0.4)" },
-          { ratio: 0.3, color: "rgba(202, 138, 4, 0.6)" },
-          { ratio: 0.6, color: "rgba(254, 240, 138, 0.8)" },
-          { ratio: 1, color: "rgba(255, 255, 255, 1)" },
-        ];
-      } else {
-        colorStops = [
-          { ratio: 0, color: "rgba(59, 130, 246, 0.4)" },
-          { ratio: 0.3, color: "rgba(16, 185, 129, 0.6)" },
-          { ratio: 0.6, color: "rgba(234, 179, 8, 0.8)" },
-          { ratio: 1, color: "rgba(239, 68, 68, 1)" },
-        ];
-      }
-
+      // Render
       const layer = new FeatureLayerRef.current!({
         source: graphics,
         title: "Immersive Heatmap",
@@ -678,8 +749,12 @@ export function ArcGISMap() {
         ],
         renderer: new HeatmapRendererRef.current!({
           field: "value",
-          colorStops: colorStops,
-          radius: 120,
+          colorStops: [
+            { ratio: 0, color: "rgba(0,0,0,0)" },
+            { ratio: 0.5, color: "rgba(255,0,0,0.5)" },
+            { ratio: 1, color: "rgba(255,0,0,1)" },
+          ],
+          radius: 112,
         }),
         elevationInfo: { mode: "on-the-ground" },
       });
@@ -687,7 +762,7 @@ export function ArcGISMap() {
       heatmapLayerRef.current = layer;
       mapInstanceRef.current?.add(layer);
 
-      // ✅ Fix: Target the view implicitly to the correctly typed Polygon geometry
+      // Camera: Frame the entire area, not just one sensor
       const targetGeometry = new PolygonRef.current!({
         rings: [targetBlueprint],
         spatialReference: { wkid: 4326 },
@@ -702,12 +777,12 @@ export function ArcGISMap() {
         { duration: 1500, easing: "ease-in-out" },
       );
     } else {
+      // Cleanup when exiting immersive mode
       if (footprintLayerRef.current) footprintLayerRef.current.visible = false;
       if (maskLayerRef.current) maskLayerRef.current.visible = false;
 
       const map = mapInstanceRef.current;
       if (map && map.basemap) {
-        // ✅ Correctly typed restoration function
         const toggleBuildings = (
           layers: Collection<Layer>,
           visible: boolean,
@@ -730,40 +805,39 @@ export function ArcGISMap() {
         mapInstanceRef.current?.remove(heatmapLayerRef.current);
         heatmapLayerRef.current = null;
       }
-
-      if (isMapReady && viewRef.current && !isImmersiveActive) {
-        viewRef.current.goTo(
-          {
-            center: [APP_CONFIG.COORDINATE.X, APP_CONFIG.COORDINATE.Y],
-            zoom: 15,
-            tilt: 60,
-          },
-          { duration: 1500 },
-        );
-      }
     }
-  }, [isImmersiveActive, focusedSensor?.type, isMapReady]);
+    // ✅ ADDED `sensors` TO DEPENDENCIES to ensure re-render on data update
+  }, [isImmersiveActive, focusedSensor?.type, isMapReady, sensors]);
 
-  // SENSORS DATA LOOP
+  // ✅ SENSOR LOOP: Draws the 3D WebGL Cylinders (ISOLATION APPLIED)
   useEffect(() => {
     if (!isMapReady || !sensorLayerRef.current) return;
 
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
-    const SimpleMarkerClass = SimpleMarkerRef.current;
+    const PointSymbol3DClass = PointSymbol3DRef.current;
+    const ObjectSymbol3DLayerClass = ObjectSymbol3DLayerRef.current;
     const ColorClass = ColorRef.current;
-    if (!PointClass || !GraphicClass || !SimpleMarkerClass || !ColorClass)
+    if (
+      !PointClass ||
+      !GraphicClass ||
+      !PointSymbol3DClass ||
+      !ObjectSymbol3DLayerClass ||
+      !ColorClass
+    )
       return;
 
     const currentSensorIds = new Set(sensors.map((s) => s.id));
 
     const toRemove = sensorLayerRef.current.graphics.filter((g) => {
-      const isHiddenByImmersive =
-        isImmersiveActive && focusedSensor?.id !== g.attributes.id;
-      return (
+      const isAnotherSelected =
+        selectedEntityType === "sensor" &&
+        !!selectedEntityId &&
+        selectedEntityId !== g.attributes.id;
+      return Boolean(
         !currentSensorIds.has(g.attributes.id) ||
         mapFilters[g.attributes.filterType] === false ||
-        isHiddenByImmersive
+        isAnotherSelected,
       );
     });
 
@@ -772,54 +846,50 @@ export function ArcGISMap() {
     }
 
     sensors.forEach((sensor) => {
-      const isHiddenByImmersive =
-        isImmersiveActive && focusedSensor?.id !== sensor.id;
-      if (mapFilters[sensor.type] === false || isHiddenByImmersive) return;
+      const isAnotherSelected =
+        selectedEntityType === "sensor" &&
+        !!selectedEntityId &&
+        selectedEntityId !== sensor.id;
+      if (mapFilters[sensor.type] === false || isAnotherSelected) return;
 
-      const statusColor =
-        sensor.status === "ACTIVE"
-          ? [34, 197, 94]
-          : sensor.status === "WARNING"
-            ? [245, 158, 11]
-            : [239, 68, 68];
+      const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
+      const dynamicHeight = Math.max(colProps.height, 10);
+
+      const coords = getOffsetCoords(sensor);
+
+      const symbol3D = new PointSymbol3DClass({
+        symbolLayers: [
+          new ObjectSymbol3DLayerClass({
+            resource: { primitive: "cylinder" },
+            material: { color: new ColorClass(colProps.color) },
+            width: 10,
+            height: dynamicHeight,
+            anchor: "bottom",
+          }),
+        ],
+      });
+
       const existingGraphic = sensorLayerRef.current!.graphics.find(
         (g) => g.attributes.id === sensor.id,
       );
 
       if (existingGraphic) {
         existingGraphic.geometry = new PointClass({
-          longitude: getLon(sensor),
-          latitude: getLat(sensor),
+          longitude: coords.lon,
+          latitude: coords.lat,
           spatialReference: { wkid: 4326 },
         });
 
-        const currentSymbol = existingGraphic.symbol as SimpleMarkerSymbol;
-        if (
-          currentSymbol?.color &&
-          (currentSymbol.color.r !== statusColor[0] ||
-            currentSymbol.color.g !== statusColor[1])
-        ) {
-          existingGraphic.symbol = new SimpleMarkerClass({
-            style: "square",
-            color: new ColorClass([...statusColor, 0.8]),
-            size: 10,
-            outline: { color: [255, 255, 255, 0.8], width: 1.5 },
-          });
-        }
+        existingGraphic.symbol = symbol3D;
       } else {
         sensorLayerRef.current!.add(
           new GraphicClass({
             geometry: new PointClass({
-              longitude: getLon(sensor),
-              latitude: getLat(sensor),
+              longitude: coords.lon,
+              latitude: coords.lat,
               spatialReference: { wkid: 4326 },
             }),
-            symbol: new SimpleMarkerClass({
-              style: "square",
-              color: new ColorClass([...statusColor, 0.8]),
-              size: 10,
-              outline: { color: [255, 255, 255, 0.8], width: 1.5 },
-            }),
+            symbol: symbol3D,
             attributes: {
               id: sensor.id,
               type: "sensor",
@@ -836,8 +906,8 @@ export function ArcGISMap() {
     mapFilters,
     isMapReady,
     syncTooltips,
-    isImmersiveActive,
-    focusedSensor?.id,
+    selectedEntityId,
+    selectedEntityType,
   ]);
 
   // PLANES LOOP
@@ -846,7 +916,6 @@ export function ArcGISMap() {
     const GraphicClass = GraphicRef.current;
     const PictureMarkerClass = PictureMarkerRef.current;
     const PolylineClass = PolylineRef.current;
-    const TextSymbolClass = TextSymbolRef.current;
 
     if (
       !planeLayerRef.current ||
@@ -924,27 +993,32 @@ export function ArcGISMap() {
         );
       }
 
-      const displayName = plane.callsign || plane.airline;
-      if (displayName) {
+      if (plane.logoUrl) {
+        const proxiedLogoUrl = `https://wsrv.nl/?url=${encodeURIComponent(plane.logoUrl)}&w=64&h=64&output=png`;
+
         if (existingLogo) {
           existingLogo.geometry = planeGeom;
-          const currentSymbol = existingLogo.symbol as TextSymbol;
-          if (currentSymbol && currentSymbol.text !== displayName) {
-            const newSymbol = currentSymbol.clone();
-            newSymbol.text = displayName;
-            existingLogo.symbol = newSymbol;
+          const currentSymbol = existingLogo.symbol as PictureMarkerSymbol;
+
+          if (currentSymbol && currentSymbol.url !== proxiedLogoUrl) {
+            existingLogo.symbol = new PictureMarkerClass({
+              url: proxiedLogoUrl,
+              width: "40px",
+              height: "40px",
+              yoffset: 35,
+              xoffset: -6,
+            });
           }
-        } else if (TextSymbolClass) {
+        } else if (PictureMarkerClass) {
           airlineLabelLayerRef.current?.add(
             new GraphicClass({
               geometry: planeGeom,
-              symbol: new TextSymbolClass({
-                text: displayName,
-                color: [255, 255, 255, 0.9],
-                haloColor: [30, 58, 138, 0.8],
-                haloSize: "1px",
-                font: { size: 9, family: "monospace", weight: "bold" },
-                yoffset: 20,
+              symbol: new PictureMarkerClass({
+                url: proxiedLogoUrl,
+                width: "40px",
+                height: "40px",
+                yoffset: 35,
+                xoffset: -6,
               }),
               attributes: { id: `${plane.id}_logo`, type: "label" },
             }),
