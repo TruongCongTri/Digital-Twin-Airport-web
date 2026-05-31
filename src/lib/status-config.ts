@@ -10,6 +10,7 @@ export const PLANE_STATUS_CONFIG: Record<
   LANDED: { label: "Landed", color: "#10b981", bgColor: "#d1fae5" },
   TAXIING: { label: "Taxiing", color: "#3b82f6", bgColor: "#dbeafe" },
   PARKED: { label: "Parked", color: "#6b7280", bgColor: "#f3f4f6" },
+  BOARDING: { label: "Boarding", color: "#8b5cf6", bgColor: "#ede9fe" },
   PUSHBACK: { label: "Pushback", color: "#8b5cf6", bgColor: "#ede9fe" },
   DEPARTED: { label: "Departed", color: "#10b981", bgColor: "#d1fae5" },
   DIVERTED: { label: "Diverted", color: "#ef4444", bgColor: "#fee2e2" },

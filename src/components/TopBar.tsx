@@ -7,11 +7,11 @@ import { useAirportStore } from "../store/airport-store";
 
 export function TopBar() {
   const { metrics } = useAirportStore();
-
   const [time, setTime] = useState("");
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    // ✅ OPTIMIZATION: Initialize immediately to prevent UI layout shift
+    const updateTime = () => {
       setTime(
         new Date().toLocaleTimeString([], {
           hour: "2-digit",
@@ -19,7 +19,10 @@ export function TopBar() {
           second: "2-digit",
         }),
       );
-    }, 1000);
+    };
+
+    updateTime();
+    const timer = setInterval(updateTime, 1000);
     return () => clearInterval(timer);
   }, []);
 

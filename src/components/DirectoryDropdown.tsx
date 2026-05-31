@@ -2,15 +2,41 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAirportStore } from "@/src/store/airport-store";
-import {
-  Plane,
-  Radio,
-  ChevronUp,
-  ChevronDown,
-  ListFilter,
-  MapPin,
-  Filter,
-} from "lucide-react";
+import { ChevronUp, ChevronDown, ListFilter, ArrowRight } from "lucide-react";
+
+const PLANE_STATUSES = [
+  "SCHEDULED",
+  "DELAYED",
+  "APPROACHING",
+  "LANDED",
+  "TAXIING",
+  "PARKED",
+  "BOARDING",
+  "PUSHBACK",
+  "DEPARTED",
+  "DIVERTED",
+  "CANCELLED",
+];
+const SENSOR_STATUSES = [
+  "ACTIVE",
+  "WARNING",
+  "CRITICAL",
+  "MAINTENANCE",
+  "CALIBRATING",
+  "OFFLINE",
+  "UNREACHABLE",
+];
+const SENSOR_TYPES = [
+  "CO2",
+  "TEMPERATURE",
+  "HUMIDITY",
+  "WIND_INDOOR",
+  "WIND_OUTDOOR",
+  "TILT_STRUCTURAL",
+  "LIGHT_DENSITY",
+  "TARMAC_TEMP",
+  "CAMERA_AI_CROWD",
+];
 
 export function DirectoryDropdown() {
   const [isOpen, setIsOpen] = useState(false);
@@ -25,85 +51,60 @@ export function DirectoryDropdown() {
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [selectedAirline, setSelectedAirline] = useState<string | null>(null);
 
-  // Constants
-  const PLANE_STATUSES = [
-    "SCHEDULED",
-    "DELAYED",
-    "APPROACHING",
-    "LANDED",
-    "TAXIING",
-    "PARKED",
-    "BOARDING",
-    "PUSHBACK",
-    "DEPARTED",
-    "DIVERTED",
-    "CANCELLED",
-  ];
-  const SENSOR_STATUSES = [
-    "ACTIVE",
-    "WARNING",
-    "CRITICAL",
-    "MAINTENANCE",
-    "CALIBRATING",
-    "OFFLINE",
-    "UNREACHABLE",
-  ];
-  const SENSOR_TYPES = [
-    "CO2",
-    "TEMPERATURE",
-    "HUMIDITY",
-    "WIND_INDOOR",
-    "WIND_OUTDOOR",
-    "TILT_STRUCTURAL",
-    "LIGHT_DENSITY",
-    "TARMAC_TEMP",
-    "CAMERA_AI_CROWD",
-  ];
+  // ✅ OPTIMIZATION: Only parse the airline strings if the menu is actively open
+  const AIRLINES = useMemo(() => {
+    if (!isOpen) return [];
+    return Array.from(new Set(planes.map((p) => p.airline || "UNKNOWN")));
+  }, [planes, isOpen]);
 
-  // --- DERIVED COUNTS LOGIC ---
-  const AIRLINES = useMemo(
-    () => Array.from(new Set(planes.map((p) => p.airline))),
-    [planes],
-  );
-
+  // ✅ OPTIMIZATION: Heavy reduction loops short-circuit when dropdown is closed
   const counts = useMemo(() => {
-    // 1. Planes Status Counts
+    if (!isOpen) {
+      return {
+        planeStatusCounts: {},
+        planeAirlineCounts: {},
+        sensorTypeCounts: {},
+        sensorStatusCounts: {},
+      };
+    }
+
     const planeStatusCounts = planes.reduce(
       (acc, p) => {
-        acc[p.status] = (acc[p.status] || 0) + 1;
+        const st = p.status || "UNKNOWN";
+        acc[st] = (acc[st] || 0) + 1;
         return acc;
       },
       {} as Record<string, number>,
     );
 
-    // 2. Planes Airline Counts
     const planeAirlineCounts = planes.reduce(
       (acc, p) => {
-        acc[p.airline] = (acc[p.airline] || 0) + 1;
+        const al = p.airline || "UNKNOWN";
+        acc[al] = (acc[al] || 0) + 1;
         return acc;
       },
       {} as Record<string, number>,
     );
 
-    // 3. Sensors Type Counts (Cross-filtered by selected Status)
-    const sensorsFilteredByStatus = sensors.filter((s) =>
-      selectedStatus ? s.status === selectedStatus : true,
-    );
+    const sensorsFilteredByStatus = selectedStatus
+      ? sensors.filter((s) => s.status === selectedStatus)
+      : sensors;
     const sensorTypeCounts = sensorsFilteredByStatus.reduce(
       (acc, s) => {
-        acc[s.type] = (acc[s.type] || 0) + 1;
+        const t = s.type || "UNKNOWN";
+        acc[t] = (acc[t] || 0) + 1;
         return acc;
       },
       {} as Record<string, number>,
     );
 
-    // 4. Sensors Status Counts (Cross-filtered by selected Type)
-    const sensorsFilteredByType = sensors.filter((s) =>
-      selectedType ? s.type === selectedType : true,
-    );
+    const sensorsFilteredByType = selectedType
+      ? sensors.filter((s) => s.type === selectedType)
+      : sensors;
     const sensorStatusCounts = sensorsFilteredByType.reduce(
       (acc, s) => {
-        acc[s.status] = (acc[s.status] || 0) + 1;
+        const st = s.status || "UNKNOWN";
+        acc[st] = (acc[st] || 0) + 1;
         return acc;
       },
       {} as Record<string, number>,
@@ -115,9 +116,8 @@ export function DirectoryDropdown() {
       sensorTypeCounts,
       sensorStatusCounts,
     };
-  }, [planes, sensors, selectedStatus, selectedType]);
+  }, [planes, sensors, selectedStatus, selectedType, isOpen]);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -137,17 +137,23 @@ export function DirectoryDropdown() {
     setSelectedType(null);
   };
 
-  const filteredPlanes = planes.filter(
-    (p) =>
-      (selectedStatus ? p.status === selectedStatus : true) &&
-      (selectedAirline ? p.airline === selectedAirline : true),
-  );
+  // ✅ OPTIMIZATION: Memoize filtered outputs so they don't block the React render cycle
+  const { filteredPlanes, filteredSensors } = useMemo(() => {
+    if (!isOpen) return { filteredPlanes: [], filteredSensors: [] };
 
-  const filteredSensors = sensors.filter(
-    (s) =>
-      (selectedType ? s.type === selectedType : true) &&
-      (selectedStatus ? s.status === selectedStatus : true),
-  );
+    return {
+      filteredPlanes: planes.filter(
+        (p) =>
+          (selectedStatus ? p.status === selectedStatus : true) &&
+          (selectedAirline ? p.airline === selectedAirline : true),
+      ),
+      filteredSensors: sensors.filter(
+        (s) =>
+          (selectedType ? s.type === selectedType : true) &&
+          (selectedStatus ? s.status === selectedStatus : true),
+      ),
+    };
+  }, [planes, sensors, selectedStatus, selectedAirline, selectedType, isOpen]);
 
   return (
     <div ref={dropdownRef} className="relative flex flex-col items-center">
@@ -192,7 +198,6 @@ export function DirectoryDropdown() {
             </div>
 
             <div className="space-y-4 mb-4">
-              {/* Status Filters */}
               <div>
                 <label className="text-[9px] font-bold text-gray-400 uppercase mb-2 block">
                   Status
@@ -211,7 +216,7 @@ export function DirectoryDropdown() {
                     >
                       {s}{" "}
                       <span className="opacity-50">
-                        {/* FIXED TERNARY OPERATOR HERE */}(
+                        (
                         {activeTab === "planes"
                           ? counts.planeStatusCounts[s] || 0
                           : counts.sensorStatusCounts[s] || 0}
@@ -222,7 +227,6 @@ export function DirectoryDropdown() {
                 </div>
               </div>
 
-              {/* Airline Filter (Planes Only) */}
               {activeTab === "planes" && (
                 <div>
                   <label className="text-[9px] font-bold text-gray-400 uppercase mb-2 block">
@@ -247,7 +251,6 @@ export function DirectoryDropdown() {
                 </div>
               )}
 
-              {/* Type Filter (Sensors Only) */}
               {activeTab === "sensors" && (
                 <div>
                   <label className="text-[9px] font-bold text-gray-400 uppercase mb-2 block">
@@ -273,7 +276,6 @@ export function DirectoryDropdown() {
               )}
             </div>
 
-            {/* List - Separated Maps to fix Type Inference */}
             <div className="max-h-60 overflow-y-auto custom-scrollbar pt-2 border-t border-gray-100">
               {activeTab === "planes" &&
                 filteredPlanes.map((plane) => (
@@ -285,18 +287,47 @@ export function DirectoryDropdown() {
                     }}
                     className="w-full flex items-center justify-between p-2 hover:bg-gray-50 rounded-lg transition-colors border-b border-gray-50"
                   >
-                    <div className="flex flex-col items-start">
-                      <span className="text-xs font-bold text-gray-800">
-                        {plane.callsign}
-                      </span>
-                      <span className="text-[9px] font-medium text-gray-400">
-                        {plane.airline}
-                      </span>
+                    <div className="flex items-center gap-2.5">
+                      {/* ✅ ADDED: Airline Logo implementation */}
+                      {plane.logoUrl ? (
+                        <img
+                          src={plane.logoUrl}
+                          alt={plane.airline}
+                          className="w-5 h-5 object-contain shrink-0"
+                        />
+                      ) : (
+                        <div className="w-5 h-5 bg-gray-200 rounded-md flex items-center justify-center text-[8px] font-bold text-gray-500 shrink-0">
+                          {plane.airline?.charAt(0) || "U"}
+                        </div>
+                      )}
+
+                      <div className="flex flex-col items-start">
+                        <span className="text-xs font-bold text-gray-800">
+                          {plane.callsign || plane.flightNumber || "N/A"}
+                        </span>
+                        <span className="text-[9px] font-medium text-gray-400">
+                          {plane.airline || "Unknown"}
+                        </span>
+                      </div>
                     </div>
-                    <div
-                      className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${["CRITICAL", "WARNING", "DELAYED", "CANCELLED"].includes(plane.status) ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}
-                    >
-                      {plane.status}
+
+                    <div className="flex flex-col items-end gap-1">
+                      <div
+                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${["CRITICAL", "WARNING", "DELAYED", "CANCELLED"].includes(plane.status || "") ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}
+                      >
+                        {plane.status}
+                      </div>
+                      {/* ✅ ADDED: Render Direction alongside the status if available */}
+                      {plane.direction && (
+                        <div className="flex items-center gap-1 text-[8px] font-bold text-gray-400 uppercase tracking-widest">
+                          {plane.direction}
+                          {plane.direction === "INBOUND" ? (
+                            <ArrowRight size={8} className="rotate-45" />
+                          ) : plane.direction === "OUTBOUND" ? (
+                            <ArrowRight size={8} className="-rotate-45" />
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   </button>
                 ))}
@@ -313,14 +344,14 @@ export function DirectoryDropdown() {
                   >
                     <div className="flex flex-col items-start">
                       <span className="text-xs font-bold text-gray-800">
-                        {sensor.name}
+                        {sensor.name || "Unknown"}
                       </span>
                       <span className="text-[9px] font-medium text-gray-400">
-                        {sensor.type.replace("_", " ")}
+                        {(sensor.type || "UNKNOWN").replace("_", " ")}
                       </span>
                     </div>
                     <div
-                      className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${["CRITICAL", "WARNING", "DELAYED", "CANCELLED"].includes(sensor.status) ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}
+                      className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${["CRITICAL", "WARNING", "DELAYED", "CANCELLED"].includes(sensor.status || "") ? "bg-red-100 text-red-600" : "bg-gray-100 text-gray-500"}`}
                     >
                       {sensor.status}
                     </div>

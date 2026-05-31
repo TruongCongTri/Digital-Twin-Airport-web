@@ -1,11 +1,12 @@
 // Root Layout: Header, Footer, Font, Providers
 import type { Metadata } from "next";
-import { Inter, Geist } from "next/font/google";
+import { Geist } from "next/font/google";
 import "./globals.css";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import { CustomCursor } from "@/src/components/CustomCursor";
 import { Toaster } from "@/components/ui/sonner";
+import { AppBootstrapper } from "@/src/components/AppBootstrapper";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -38,8 +39,8 @@ export default function RootLayout({
     >
       <body className="h-full overflow-hidden">
         <CustomCursor />
-        {children}
         <Toaster />
+        <AppBootstrapper>{children}</AppBootstrapper>
       </body>
     </html>
   );

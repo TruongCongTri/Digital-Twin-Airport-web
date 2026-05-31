@@ -2,16 +2,17 @@ export type EntityType = "plane" | "sensor" | null;
 export type AppState = "normal" | "dashboard" | "entity-focus";
 export type PlaneStatus =
   | "SCHEDULED"
-  | "DELAYED"
   | "APPROACHING"
-  | "DELAYED"
   | "LANDED"
   | "TAXIING"
   | "PARKED"
+  | "BOARDING"
   | "PUSHBACK"
   | "DEPARTED"
+  | "DELAYED"
   | "DIVERTED"
   | "CANCELLED";
+export type PlaneDirection = "INBOUND" | "OUTBOUND" | "TURNAROUND";
 export type ZoneType =
   | "TERMINAL_DOMESTIC"
   | "TERMINAL_INTERNATIONAL"
@@ -40,13 +41,13 @@ export type SensorType =
   | "CAMERA_AI_CROWD" // Crowd flow tracking and AI prediction
   | "WIND_OUTDOOR"
   | "TARMAC_TEMP";
-export type Scenario = "TROPICAL_SQUALL" | "TARMAC_OVERHEAT" | "AC_FAILURE";
-export type SimulationMode =
-  | "NONE"
-  | "GENERAL"
+export type Scenario =
   | "TROPICAL_SQUALL"
   | "TARMAC_OVERHEAT"
-  | "AC_FAILURE";
+  | "AC_FAILURE"
+  | "HEAVY_LOAD"
+  | "EARTHQUAKE";
+export type SimulationMode = "NONE" | "GENERAL" | Scenario;
 
 export interface MapPoint {
   longitude: number;
@@ -111,6 +112,7 @@ export interface Plane {
   origin: string;
   destination: string;
   status: PlaneStatus;
+  direction: PlaneDirection;
 
   // Relations
   assignedRunway: string | null;

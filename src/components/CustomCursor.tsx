@@ -1,12 +1,11 @@
 "use client";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCustomCursor } from "@/src/hooks/useCustomCursor";
-import { Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 
 export function CustomCursor() {
   const { cursorRef, cursorType } = useCustomCursor();
 
-  // Define the smooth morphing states for Framer Motion
   const variants = {
     default: {
       width: 24,
@@ -37,13 +36,11 @@ export function CustomCursor() {
     },
     lens: {
       width: 120,
-      height: 120, // Much larger to look like a real magnifying glass
-      backgroundColor: "rgba(255, 255, 255, 0.05)", // Almost completely transparent
-      border: "3px solid rgba(203, 213, 225, 0.8)", // Silver/metallic rim
-      // Creates a 3D glass glare and reflection inside the rim
+      height: 120,
+      backgroundColor: "rgba(255, 255, 255, 0.05)",
+      border: "3px solid rgba(203, 213, 225, 0.8)",
       boxShadow:
         "inset 0 0 20px rgba(255,255,255,0.6), inset 10px 0 40px rgba(255,255,255,0.4), 0 10px 25px rgba(0,0,0,0.15)",
-      // Bends the light of the background underneath it
       backdropFilter: "blur(2px) contrast(1.2) saturate(1.2)",
       borderRadius: "50%",
       x: -60,
@@ -64,7 +61,6 @@ export function CustomCursor() {
         className="flex items-center justify-center backdrop-blur-[2px] shadow-sm relative"
       >
         <AnimatePresence mode="wait">
-          {/* 1. Tactile Dot for Buttons */}
           {cursorType === "pointer" && (
             <motion.div
               key="dot"
@@ -74,8 +70,6 @@ export function CustomCursor() {
               className="absolute w-2.5 h-2.5 bg-[#1e3a8a] rounded-full"
             />
           )}
-
-          {/* 2. Precision Crosshair for Graphs */}
           {cursorType === "crosshair" && (
             <motion.div
               key="cross"
@@ -87,8 +81,6 @@ export function CustomCursor() {
               <Plus size={20} strokeWidth={1} />
             </motion.div>
           )}
-
-          {/* 3. The Data Lens for Numbers */}
           {cursorType === "lens" && (
             <motion.div
               key="glare"

@@ -1,3 +1,4 @@
+"use client";
 import { useEffect, useRef, useState } from "react";
 
 export type CursorType = "default" | "pointer" | "text" | "crosshair" | "lens";
@@ -6,11 +7,34 @@ export function useCustomCursor() {
   const cursorRef = useRef<HTMLDivElement>(null);
   const [cursorType, setCursorType] = useState<CursorType>("default");
 
+  // ✅ OPTIMIZATION 3: Synchronous guard to prevent redundant React renders
+  const currentTypeRef = useRef<CursorType>("default");
+
   useEffect(() => {
-    // 1. Direct DOM manipulation for movement (Zero React lag)
+    // Helper to safely trigger React state only when it actually changes
+    const updateCursorState = (newType: CursorType) => {
+      if (currentTypeRef.current !== newType) {
+        currentTypeRef.current = newType;
+        setCursorType(newType);
+      }
+    };
+
+    // ✅ OPTIMIZATION 1: requestAnimationFrame syncs movement to monitor refresh rate
+    let rafId: number | null = null;
+    let mouseX = 0;
+    let mouseY = 0;
+
     const updatePosition = (e: MouseEvent) => {
-      if (cursorRef.current) {
-        cursorRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0)`;
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+
+      if (!rafId) {
+        rafId = requestAnimationFrame(() => {
+          if (cursorRef.current) {
+            cursorRef.current.style.transform = `translate3d(${mouseX}px, ${mouseY}px, 0)`;
+          }
+          rafId = null;
+        });
       }
     };
 
@@ -19,33 +43,41 @@ export function useCustomCursor() {
       const target = e.target as HTMLElement;
 
       // 1. Check for the new "Lens" trigger on numbers
-      const lensTarget = target.closest('[data-cursor="lens"]');
-      if (lensTarget) {
-        setCursorType("lens");
+      if (target.closest('[data-cursor="lens"]')) {
+        updateCursorState("lens");
         return;
       }
 
       // 2. Check for Graphs (Crosshair)
       if (target.closest('[data-cursor="crosshair"]')) {
-        setCursorType("crosshair");
+        updateCursorState("crosshair");
+        return;
+      }
+
+      // ✅ OPTIMIZATION 2: If we are hovering over the ArcGIS Map, DO NOT override.
+      // We must let the map's hit-test logic control the cursor via 'setMapCursor'
+      if (
+        target.closest("#map-container") ||
+        target.closest(".esri-view-surface")
+      ) {
         return;
       }
 
       // 3. Check for standard clickable UI
-      if (target.closest('button, a, select, [role="button"], tr, th')) {
-        setCursorType("pointer");
+      if (target.closest('button, a, select, input, [role="button"], tr, th')) {
+        updateCursorState("pointer");
         return;
       }
 
       // Revert to normal
-      setCursorType("default");
+      updateCursorState("default");
     };
 
     // 4. Custom Event Listener so ArcGISMap can trigger pointer state
     const handleMapHover = (e: Event) => {
       const customEvent = e as CustomEvent<{ type: CursorType }>;
       if (customEvent.detail && customEvent.detail.type) {
-        setCursorType(customEvent.detail.type);
+        updateCursorState(customEvent.detail.type);
       }
     };
 
@@ -60,6 +92,7 @@ export function useCustomCursor() {
         "setMapCursor",
         handleMapHover as EventListener,
       );
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, []);
 

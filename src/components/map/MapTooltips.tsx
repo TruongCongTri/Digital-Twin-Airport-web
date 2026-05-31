@@ -5,7 +5,15 @@ import type { Plane, Sensor } from "@/types";
 import { useAirportStore } from "@/src/store/airport-store";
 
 function PlaneTooltip({ plane, x, y }: { plane: Plane; x: number; y: number }) {
-  const { selectEntity } = useAirportStore();
+  // ✅ SAFE FALLBACKS: Ensure UI never crashes if static data is lagging behind live data
+  const destinationText =
+    plane.status === "TAXIING"
+      ? `Next: Runway ${plane.assignedRunway || "Pending"}`
+      : `Gate: ${plane.parkingStand?.code || plane.gate || "Pending"}`;
+
+  const callsign = plane.callsign || plane.flightNumber || "UNKNOWN";
+  const status = plane.status || "UNKNOWN";
+
   return (
     <div
       className="absolute z-20 pointer-events-none"
@@ -18,30 +26,24 @@ function PlaneTooltip({ plane, x, y }: { plane: Plane; x: number; y: number }) {
         transition={{ duration: 0.15 }}
         className="flex flex-col items-center"
       >
-        {/* Tooltip Box */}
         <div className="bg-white/95 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200/80 text-left whitespace-nowrap min-w-[120px]">
           <div className="flex items-center gap-1.5 border-b border-gray-100 pb-1 mb-1">
             <div
-              className={`w-2 h-2 rounded-sm rotate-45 ${plane.status === "TAXIING" ? "bg-blue-500" : "bg-gray-400"}`}
+              className={`w-2 h-2 rounded-sm rotate-45 ${status === "TAXIING" ? "bg-blue-500" : "bg-gray-400"}`}
             />
             <span className="text-[11px] font-bold text-gray-800">
-              {plane.callsign}
+              {callsign}
             </span>
           </div>
           <div className="text-[10px] font-bold text-gray-600 uppercase">
-            {plane.status}
+            {status}
           </div>
           <div className="text-[9px] text-gray-400 mt-0.5">
-            {plane.status === "TAXIING"
-              ? `Next: Runaway ${plane.assignedRunway || "Pending"}`
-              : `Gate: ${plane.gate}`}
+            {destinationText}
           </div>
         </div>
 
-        {/* Dashed Connector Line */}
         <div className="h-6 border-l-2 border-dashed border-gray-400 w-px my-0.5" />
-
-        {/* Anchor Dot */}
         <div className="w-1.5 h-1.5 rounded-full bg-gray-400" />
       </motion.div>
     </div>
@@ -57,17 +59,20 @@ function SensorTooltip({
   x: number;
   y: number;
 }) {
-  const { selectEntity } = useAirportStore();
+  const status = sensor.status || "UNKNOWN";
   const dotColor =
-    sensor.status === "ACTIVE"
+    status === "ACTIVE"
       ? "bg-green-500"
-      : sensor.status === "CRITICAL"
-        ? "bg-amber-500"
-        : "bg-red-500";
+      : status === "CRITICAL"
+        ? "bg-red-500"
+        : "bg-amber-500";
 
+  // ✅ SAFELY READ HISTORY: Prevent crashes if history array is empty
+  const historyLen = sensor.history?.length || 0;
   const lastVal =
-    sensor.history[sensor.history.length - 1]?.value || sensor.currentValue;
-  const prevVal = sensor.history[sensor.history.length - 2]?.value || lastVal;
+    historyLen > 0 ? sensor.history[historyLen - 1].value : sensor.currentValue;
+  const prevVal =
+    historyLen > 1 ? sensor.history[historyLen - 2].value : lastVal;
   const trend = lastVal > prevVal ? "↑" : lastVal < prevVal ? "↓" : "→";
 
   return (
@@ -82,19 +87,18 @@ function SensorTooltip({
         transition={{ duration: 0.15 }}
         className="flex flex-col items-center"
       >
-        {/* Tooltip Box */}
         <div className="bg-white/95 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200/80 text-left whitespace-nowrap min-w-[110px]">
           <div className="flex items-center gap-1.5 border-b border-gray-100 pb-1 mb-1">
             <div
-              className={`w-2 h-2 rounded-full ${sensor.status === "CRITICAL" ? "bg-red-500 animate-pulse" : "bg-green-500"}`}
+              className={`w-2 h-2 rounded-full ${status === "CRITICAL" ? "bg-red-500 animate-pulse" : "bg-green-500"}`}
             />
             <span className="text-[11px] font-bold text-gray-800">
-              {sensor.name}
+              {sensor.name || "Unknown Sensor"}
             </span>
           </div>
           <div className="flex justify-between items-center gap-3">
             <span className="text-[11px] font-mono text-gray-700">
-              {sensor.currentValue} {sensor.unit}
+              {Number(sensor.currentValue).toFixed(1)} {sensor.unit}
             </span>
             <span
               className={`text-[10px] font-bold ${trend === "↑" ? "text-red-500" : "text-blue-500"}`}
@@ -104,10 +108,7 @@ function SensorTooltip({
           </div>
         </div>
 
-        {/* Dashed Connector Line */}
         <div className="h-4 border-l-2 border-dashed border-gray-400 w-px my-0.5" />
-
-        {/* Anchor Dot */}
         <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
       </motion.div>
     </div>
@@ -115,7 +116,10 @@ function SensorTooltip({
 }
 
 export function MapTooltips() {
-  const { tooltips, planes, sensors, selectedEntityId } = useAirportStore();
+  const tooltips = useAirportStore((state) => state.tooltips);
+  const planes = useAirportStore((state) => state.planes);
+  const sensors = useAirportStore((state) => state.sensors);
+  const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
   if (selectedEntityId) return null;
 

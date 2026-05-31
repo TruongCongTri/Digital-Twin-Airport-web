@@ -16,18 +16,14 @@ import {
 } from "lucide-react";
 
 export default function MapBubbles() {
-  const screenPoints = useTelemetryStore((state) => state.screenPoints);
-  const activeSensorId = useUIStore((state) => state.activeSensorDetailId);
-  const setActive = useUIStore((state) => state.setActiveSensorDetail);
-
   const tooltips = useAirportStore((state) => state.tooltips);
   const planes = useAirportStore((state) => state.planes);
   const sensors = useAirportStore((state) => state.sensors);
   const selectEntity = useAirportStore((state) => state.selectEntity);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
-  // Helper to render the correct icon based on sensor type
   const getSensorIcon = (type: string) => {
+    if (!type) return <Wifi size={12} className="text-gray-400" />;
     if (type.includes("TEMP"))
       return <Thermometer size={12} className="text-red-500" />;
     if (type.includes("WIND"))
@@ -61,6 +57,12 @@ export default function MapBubbles() {
             const plane = planes.find((p) => p.id === tip.entityId);
             if (!plane) return null;
 
+            // ✅ SAFE FALLBACKS
+            const airline = plane.airline || "Unknown";
+            const callsign = plane.callsign || plane.flightNumber || "N/A";
+            const firstLetter = airline.charAt(0).toUpperCase() || "U";
+            const speed = plane.speed || 0;
+
             return (
               <div
                 key={`bubble-${tip.entityId}`}
@@ -71,21 +73,26 @@ export default function MapBubbles() {
                 <div
                   className={`border ${isSelected ? "border-[#1e3a8a] shadow-md" : "border-gray-200 shadow-sm"} bg-white/95 backdrop-blur-sm rounded-lg px-2 py-1.5 min-w-[100px] flex items-center gap-2`}
                 >
-                  {/* Simulated Airline Logo (First Letter + Color block) */}
                   <div className="w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold text-white bg-blue-900 shrink-0">
-                    {plane.airline.charAt(0)}
+                    {firstLetter}
                   </div>
-                  <img src={plane.logoUrl} alt={plane.callsign} />
+                  {plane.logoUrl && (
+                    <img
+                      src={plane.logoUrl}
+                      alt={callsign}
+                      className="w-4 h-4 object-contain"
+                    />
+                  )}
                   <div className="flex flex-col pr-1">
                     <span className="text-[#1e3a8a] font-bold text-xs tracking-wider leading-tight">
-                      {plane.callsign}
+                      {callsign}
                     </span>
                     <div className="flex items-center gap-1">
                       <span className="text-gray-500 text-[9px] uppercase font-bold truncate max-w-[60px]">
-                        {plane.airline}
+                        {airline}
                       </span>
                       <span className="text-[8px] text-gray-400 font-mono">
-                        ({Math.floor(plane.speed)}kts)
+                        ({Math.floor(speed)}kts)
                       </span>
                     </div>
                   </div>
@@ -126,15 +133,14 @@ export default function MapBubbles() {
                     className={`w-1.5 h-1.5 rounded-full ${statusColor} shrink-0`}
                   />
                 </div>
-
                 <div className="flex items-baseline gap-0.5">
                   <span className="text-gray-800 font-bold font-mono text-sm leading-none tracking-tight">
                     {typeof sensor.currentValue === "number"
                       ? sensor.currentValue.toFixed(0)
-                      : sensor.currentValue}
+                      : sensor.currentValue || 0}
                   </span>
                   <span className="text-gray-400 text-[8px] font-bold uppercase">
-                    {sensor.unit}
+                    {sensor.unit || ""}
                   </span>
                 </div>
               </div>

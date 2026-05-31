@@ -8,12 +8,40 @@ import type {
   ZoneType,
   Zone,
   Scenario,
+  PlaneDirection,
 } from "@/types";
 
 export const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1",
   withCredentials: true,
 });
+
+//
+export const fetchStaticFlights = async () => {
+  const res = await apiClient.get("/flights/static");
+  return res.data?.data || [];
+};
+
+export const fetchStaticSensors = async () => {
+  const res = await apiClient.get("/sensors/static");
+  return res.data?.data || [];
+};
+
+export const fetchStaticZones = async () => {
+  const res = await apiClient.get("/zones/static");
+  return res.data?.data || [];
+};
+
+// Bulk fetch endpoints for the 5-minute Slow Path
+export const fetchAllSensorLogs = async () => {
+  try {
+    const res = await apiClient.get("/sensors/logs/all");
+    return res.data?.data || [];
+  } catch (error) {
+    console.error("Failed to fetch bulk sensor logs", error);
+    return [];
+  }
+};
 
 // --- STRICT BACKEND DTOs (Data Transfer Objects) ---
 // These perfectly match the JSON payloads returned by your server
@@ -42,6 +70,7 @@ interface RawFlight {
   origin: string;
   destination: string;
   status: string;
+  direction: string;
   assignedRunway: string | null;
   parkingStandId: string | null;
   createdAt: string;
@@ -210,6 +239,7 @@ export const fetchInitialTelemetry = async () => {
       origin: item.origin,
       destination: item.destination,
       status: item.status as PlaneStatus, // Cast to strict UI enum
+      direction: item.direction as PlaneDirection,
       assignedRunway: item.assignedRunway || null,
       parkingStandId: item.parkingStandId || null,
       parkingStand: item.parkingStand
@@ -281,8 +311,17 @@ export const stopSimulation = async () => {
   const res = await apiClient.post("/simulation/stop");
   return res.data;
 };
+export const rebootSimulation = async () => {
+  const res = await apiClient.post("/simulation/reboot");
+  return res.data?.data || null;
+};
 
 export const startScenario = async (scenario: Scenario) => {
   const res = await apiClient.post("/simulation/scenario", { scenario });
   return res.data;
+};
+
+export const fetchSimulationStatus = async () => {
+  const res = await apiClient.get("/simulation/status");
+  return res.data?.data || null;
 };

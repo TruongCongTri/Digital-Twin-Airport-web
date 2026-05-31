@@ -11,12 +11,18 @@ import type {
   SensorStatus,
   SimulationMode,
   AIPredictionPayload,
+  PlaneDirection,
 } from "@/types";
 import {
+  fetchAllSensorLogs,
   fetchFlights,
   fetchSensors,
+  fetchSimulationStatus,
+  fetchStaticFlights,
+  fetchStaticSensors,
   FlightQueryParams,
   SensorQueryParams,
+  startSimulation,
 } from "../lib/api-client";
 
 interface AirportStore {
@@ -33,6 +39,14 @@ interface AirportStore {
   metrics: AirportMetrics;
   tooltips: TooltipData[];
 
+  mapFilters: Record<string, boolean>;
+
+  // Dedicated buffers for the slow-path charts
+  historicalData: Record<string, { timestamp: string; value: number }[]>;
+  aiForecasts: Record<string, AIPredictionPayload>;
+
+  isImmersiveActive: boolean;
+
   // --- Actions ---
   toggleDashboard: () => void;
   selectEntity: (id: string, type: EntityType) => void;
@@ -41,12 +55,16 @@ interface AirportStore {
   setAnalysisMode: (mode: boolean) => void;
   updateTooltip: (tooltip: TooltipData) => void;
 
+  hydrateStaticData: () => Promise<void>;
+  syncHeavyData: () => Promise<void>;
+
   // Data Loading Actions
   setInitialData: (sensors: Sensor[], planes: Plane[]) => void;
   loadPlanes: (params?: FlightQueryParams) => Promise<void>;
   loadSensors: (params?: SensorQueryParams) => Promise<void>;
 
   updatePlaneTelemetry: (telemetry: Partial<Plane>) => void;
+  updatePlaneTelemetryBatch: (telemetryBatch: Partial<Plane>[]) => void;
   updateSensorTelemetry: (id: string, value: number, status?: string) => void;
   updateAllTooltips: (tooltips: TooltipData[]) => void;
 
@@ -55,30 +73,29 @@ interface AirportStore {
   getSelectedPlane: () => Plane | null;
   getSelectedSensor: () => Sensor | null;
 
-  aiForecasts: Record<string, AIPredictionPayload>;
   updateAIForecast: (payload: AIPredictionPayload) => void;
-
-  mapFilters: Record<string, boolean>;
   toggleMapFilter: (filterKey: string) => void;
+  syncSimulationStatus: () => Promise<void>;
+
+  setImmersiveActive: (active: boolean) => void;
 }
-
-const sanitizePlaneStatus = (status: string): PlaneStatus => {
-  const s = status.toUpperCase();
-  if (s === "LANDING") return "LANDED";
-  return s as PlaneStatus;
-};
-
-const sanitizeSensorStatus = (status: string): SensorStatus => {
-  const s = status.toUpperCase();
-  if (s === "NORMAL" || s === "OK") return "ACTIVE";
-  if (s === "ERROR" || s === "DANGER") return "CRITICAL";
-  return s as SensorStatus;
-};
 
 const getActiveFlightCount = (planes: Plane[]) => {
   return planes.filter(
     (p) => !["DEPARTED", "CANCELLED", "SCHEDULED"].includes(p.status),
   ).length;
+};
+
+const getUnitForType = (type: string): string => {
+  const t = type?.toUpperCase();
+  if (t === "TEMPERATURE" || t === "TARMAC_TEMP") return "°C";
+  if (t === "HUMIDITY") return "%";
+  if (t === "CO2") return "ppm";
+  if (t === "WIND_INDOOR" || t === "WIND_OUTDOOR") return "m/s";
+  if (t === "LIGHT_DENSITY") return "lux";
+  if (t === "TILT_STRUCTURAL") return "deg";
+  if (t === "CAMERA_AI_CROWD") return "pax";
+  return "";
 };
 
 export const useAirportStore = create<AirportStore>((set, get) => ({
@@ -91,6 +108,8 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   planes: [],
   sensors: [],
   tooltips: [],
+  historicalData: {},
+  aiForecasts: {},
   metrics: {
     activeFlights: 0,
     departuresToday: 186,
@@ -104,13 +123,16 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
     alertCount: 0,
   },
   simulationMode: "NONE",
+  isImmersiveActive: false,
 
   setSimulationMode: (mode) => set({ simulationMode: mode }),
+  setImmersiveActive: (active) => set({ isImmersiveActive: active }),
   toggleDashboard: () => {
     const { isDashboardOpen, selectedEntityId } = get();
     const next = !isDashboardOpen;
     set({
       isDashboardOpen: next,
+      isImmersiveActive: false, // ✅ Reset on toggle
       appState: next
         ? "dashboard"
         : selectedEntityId
@@ -136,6 +158,7 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       isDashboardOpen: false,
       isCameraTracking: false,
       analysisMode: false,
+      isImmersiveActive: false, // ✅ Reset on clear
     }),
 
   setCameraTracking: (tracking) => set({ isCameraTracking: tracking }),
@@ -147,7 +170,7 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       const data = await fetchFlights(params);
       const cleanPlanes: Plane[] = data.map((p: Plane) => ({
         ...p,
-        status: sanitizePlaneStatus(String(p.status)),
+        status: p.status as PlaneStatus,
       }));
       set({
         planes: cleanPlanes,
@@ -166,11 +189,85 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       const data = await fetchSensors(params);
       const cleanSensors: Sensor[] = data.map((s: Sensor) => ({
         ...s,
-        status: sanitizeSensorStatus(String(s.status)),
+        status: s.status as SensorStatus,
       }));
       set({ sensors: cleanSensors });
     } catch (e) {
       console.error("Failed to load sensors:", e);
+    }
+  },
+
+  hydrateStaticData: async () => {
+    try {
+      const [staticFlights, staticSensors] = await Promise.all([
+        fetchStaticFlights(),
+        fetchStaticSensors(),
+      ]);
+
+      const cleanPlanes = staticFlights.map((f: Plane) => ({
+        ...f,
+        status: "UNKNOWN",
+        speed: 0,
+        altitude: 0,
+        heading: 0,
+        position: { longitude: 0, latitude: 0, z: 0 },
+        path: [],
+      }));
+
+      const cleanSensors = staticSensors.map((s: Sensor) => ({
+        ...s,
+        status: "ACTIVE",
+        currentValue: 0,
+        unit: getUnitForType(s.type),
+        history: [],
+        position: { longitude: s.x, latitude: s.y, z: s.z },
+      }));
+
+      set({
+        planes: cleanPlanes,
+        sensors: cleanSensors,
+        metrics: {
+          ...get().metrics,
+          activeFlights: getActiveFlightCount(cleanPlanes),
+        },
+      });
+    } catch (e) {
+      console.error("Failed to hydrate static data:", e);
+    }
+  },
+
+  // 5-Minute Polling Action for Charts
+  syncHeavyData: async () => {
+    try {
+      const logs = await fetchAllSensorLogs();
+
+      const newHistory: Record<string, { timestamp: string; value: number }[]> =
+        {};
+
+      logs.forEach(
+        (log: { sensorId: string; timestamp: string; value: number }) => {
+          if (!newHistory[log.sensorId]) newHistory[log.sensorId] = [];
+          newHistory[log.sensorId].push({
+            timestamp: log.timestamp,
+            value: log.value,
+          });
+        },
+      );
+
+      // Sort and keep only the last 60 points for charting
+      Object.keys(newHistory).forEach((key) => {
+        newHistory[key].sort(
+          (a, b) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+        newHistory[key] = newHistory[key].slice(-60);
+      });
+
+      set({
+        historicalData: newHistory,
+      });
+    } catch (error) {
+      console.error("Failed to sync chart history arrays:", error);
     }
   },
 
@@ -223,11 +320,11 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   setInitialData: (sensors, planes) => {
     const cleanPlanes = planes.map((plane) => ({
       ...plane,
-      status: sanitizePlaneStatus(plane.status),
+      status: plane.status as PlaneStatus,
     }));
     const cleanSensors = sensors.map((sensor) => ({
       ...sensor,
-      status: sanitizeSensorStatus(sensor.status),
+      status: sensor.status as SensorStatus,
     }));
     set({
       sensors: cleanSensors,
@@ -241,23 +338,35 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
 
   updatePlaneTelemetry: (telemetry) =>
     set((state) => {
-      const cleanStatus = telemetry.status
-        ? sanitizePlaneStatus(telemetry.status)
-        : undefined;
+      const cleanStatus = telemetry.status as PlaneStatus | undefined;
       const existingIdx = state.planes.findIndex((p) => p.id === telemetry.id);
 
       if (existingIdx >= 0) {
         const updatedPlanes = [...state.planes];
         const existingPlane = updatedPlanes[existingIdx];
 
-        const newPath = [...(existingPlane.path || [])];
-        if (telemetry.position) newPath.push(telemetry.position);
+        let newPath = [...(existingPlane.path || [])];
+        if (telemetry.position) {
+          const lastPos = newPath[newPath.length - 1];
+          if (lastPos) {
+            const diffX = Math.abs(
+              telemetry.position.longitude - lastPos.longitude,
+            );
+            const diffY = Math.abs(
+              telemetry.position.latitude - lastPos.latitude,
+            );
+            if (diffX > 0.05 || diffY > 0.05) {
+              newPath = [];
+            }
+          }
+          newPath.push(telemetry.position);
+        }
 
         updatedPlanes[existingIdx] = {
           ...existingPlane,
           ...telemetry,
           ...(cleanStatus && { status: cleanStatus }),
-          path: newPath.slice(-30),
+          path: newPath.slice(-30), // Keeps the last 90 seconds of trail
         };
         const activeCount = getActiveFlightCount(updatedPlanes);
         return {
@@ -267,41 +376,73 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
           }),
         };
       }
+      return state;
+    }),
 
-      const newPlanes = [
-        ...state.planes,
-        {
-          ...telemetry,
-          ...(cleanStatus && { status: cleanStatus }),
-          path: [telemetry.position],
-        } as Plane,
-      ];
+  updatePlaneTelemetryBatch: (telemetryBatch) =>
+    set((state) => {
+      const updatedPlanes = [...state.planes];
+      let hasChanges = false;
 
+      telemetryBatch.forEach((telemetry) => {
+        const existingIdx = updatedPlanes.findIndex(
+          (p) => p.id === telemetry.id,
+        );
+        if (existingIdx >= 0) {
+          hasChanges = true;
+          const existingPlane = updatedPlanes[existingIdx];
+          const cleanStatus = telemetry.status as PlaneStatus | undefined;
+
+          let newPath = [...(existingPlane.path || [])];
+          if (telemetry.position) {
+            const lastPos = newPath[newPath.length - 1];
+            if (lastPos) {
+              const diffX = Math.abs(
+                telemetry.position.longitude - lastPos.longitude,
+              );
+              const diffY = Math.abs(
+                telemetry.position.latitude - lastPos.latitude,
+              );
+              if (diffX > 0.05 || diffY > 0.05) {
+                newPath = [];
+              }
+            }
+            newPath.push(telemetry.position);
+          }
+
+          updatedPlanes[existingIdx] = {
+            ...existingPlane,
+            ...telemetry,
+            ...(cleanStatus && { status: cleanStatus }),
+            path: newPath.slice(-30),
+          };
+        }
+      });
+
+      if (!hasChanges) return state;
+
+      const activeCount = getActiveFlightCount(updatedPlanes);
       return {
-        planes: newPlanes,
-        metrics: {
-          ...state.metrics,
-          activeFlights: getActiveFlightCount(newPlanes),
-        },
+        planes: updatedPlanes,
+        ...(activeCount !== state.metrics.activeFlights && {
+          metrics: { ...state.metrics, activeFlights: activeCount },
+        }),
       };
     }),
 
+  // Only updates the primitive live values.
+  // The history arrays (which cause Recharts to redraw) are NO LONGER touched here.
   updateSensorTelemetry: (id, value, status) =>
     set((state) => {
       const existingIdx = state.sensors.findIndex((s) => s.id === id);
       if (existingIdx >= 0) {
         const updatedSensors = [...state.sensors];
         const sensor = updatedSensors[existingIdx];
-        const newHistory = [
-          ...sensor.history,
-          { timestamp: new Date().toISOString(), value },
-        ].slice(-20);
 
         updatedSensors[existingIdx] = {
           ...sensor,
           currentValue: value,
-          history: newHistory,
-          ...(status && { status: sanitizeSensorStatus(status) }),
+          ...(status && { status: status as SensorStatus }),
         };
         return { sensors: updatedSensors };
       }
@@ -319,8 +460,6 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
     if (selectedEntityType !== "sensor" || !selectedEntityId) return null;
     return sensors.find((s) => s.id === selectedEntityId) ?? null;
   },
-
-  aiForecasts: {},
 
   updateAIForecast: (payload) =>
     set((state) => ({
@@ -346,4 +485,23 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
     set((state) => ({
       mapFilters: { ...state.mapFilters, [key]: !state.mapFilters[key] },
     })),
+
+  syncSimulationStatus: async () => {
+    try {
+      const status = await fetchSimulationStatus();
+      if (!status) return;
+
+      if (!status.isRunning) {
+        console.log("Simulation asleep. Auto-igniting engine...");
+        await startSimulation(); // Ensure this is imported from api-client
+        set({ simulationMode: "GENERAL" });
+      } else if (status.activeScenario && status.activeScenario !== "NONE") {
+        set({ simulationMode: status.activeScenario as SimulationMode });
+      } else {
+        set({ simulationMode: "GENERAL" });
+      }
+    } catch (error) {
+      console.error("Failed to sync simulation status:", error);
+    }
+  },
 }));

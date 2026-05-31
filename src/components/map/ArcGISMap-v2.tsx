@@ -77,7 +77,6 @@ const isPlaneOnGround = (plane: Plane) => {
   return true;
 };
 
-// ✅ Strictly typed interface replaces "any"
 export interface GeographicEntity {
   x?: number;
   y?: number;
@@ -89,11 +88,11 @@ export interface GeographicEntity {
   };
 }
 
-// ✅ Bulletproof extractors using the strict type
 const getLon = (entity: GeographicEntity) =>
   entity.x ?? entity.longitude ?? entity.position?.longitude ?? 0;
 const getLat = (entity: GeographicEntity) =>
   entity.y ?? entity.latitude ?? entity.position?.latitude ?? 0;
+
 export function ArcGISMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<SceneView | null>(null);
@@ -541,7 +540,6 @@ export function ArcGISMap() {
 
       const map = mapInstanceRef.current;
       if (map && map.basemap) {
-        // ✅ Correctly typed the layers map iteration to satisfy TypeScript
         const toggleBuildings = (
           layers: Collection<Layer>,
           visible: boolean,
@@ -687,7 +685,6 @@ export function ArcGISMap() {
       heatmapLayerRef.current = layer;
       mapInstanceRef.current?.add(layer);
 
-      // ✅ Fix: Target the view implicitly to the correctly typed Polygon geometry
       const targetGeometry = new PolygonRef.current!({
         rings: [targetBlueprint],
         spatialReference: { wkid: 4326 },
@@ -707,7 +704,6 @@ export function ArcGISMap() {
 
       const map = mapInstanceRef.current;
       if (map && map.basemap) {
-        // ✅ Correctly typed restoration function
         const toggleBuildings = (
           layers: Collection<Layer>,
           visible: boolean,
@@ -841,12 +837,12 @@ export function ArcGISMap() {
   ]);
 
   // PLANES LOOP
+  // ✅ LOGO RESTORATION: Swapped back to PictureMarkerSymbol instead of TextSymbol
   useEffect(() => {
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
     const PictureMarkerClass = PictureMarkerRef.current;
     const PolylineClass = PolylineRef.current;
-    const TextSymbolClass = TextSymbolRef.current;
 
     if (
       !planeLayerRef.current ||
@@ -924,27 +920,33 @@ export function ArcGISMap() {
         );
       }
 
-      const displayName = plane.callsign || plane.airline;
-      if (displayName) {
+      // ✅ Reverted back to the Proxied Image Logo implementation
+      if (plane.logoUrl) {
+        const proxiedLogoUrl = `https://wsrv.nl/?url=${encodeURIComponent(plane.logoUrl)}&w=64&h=64&output=png`;
+
         if (existingLogo) {
           existingLogo.geometry = planeGeom;
-          const currentSymbol = existingLogo.symbol as TextSymbol;
-          if (currentSymbol && currentSymbol.text !== displayName) {
-            const newSymbol = currentSymbol.clone();
-            newSymbol.text = displayName;
-            existingLogo.symbol = newSymbol;
+          const currentSymbol = existingLogo.symbol as PictureMarkerSymbol;
+
+          if (currentSymbol && currentSymbol.url !== proxiedLogoUrl) {
+            existingLogo.symbol = new PictureMarkerClass({
+              url: proxiedLogoUrl,
+              width: "40px",
+              height: "40px",
+              yoffset: 35,
+              xoffset: -6,
+            });
           }
-        } else if (TextSymbolClass) {
+        } else if (PictureMarkerClass) {
           airlineLabelLayerRef.current?.add(
             new GraphicClass({
               geometry: planeGeom,
-              symbol: new TextSymbolClass({
-                text: displayName,
-                color: [255, 255, 255, 0.9],
-                haloColor: [30, 58, 138, 0.8],
-                haloSize: "1px",
-                font: { size: 9, family: "monospace", weight: "bold" },
-                yoffset: 20,
+              symbol: new PictureMarkerClass({
+                url: proxiedLogoUrl,
+                width: "40px",
+                height: "40px",
+                yoffset: 35,
+                xoffset: -6,
               }),
               attributes: { id: `${plane.id}_logo`, type: "label" },
             }),
