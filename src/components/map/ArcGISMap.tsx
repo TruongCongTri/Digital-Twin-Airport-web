@@ -1,4 +1,4 @@
-// partial heatmap
+// advance map filters
 "use client";
 import { useAirportStore } from "@/src/store/airport-store";
 import {
@@ -24,6 +24,9 @@ import {
   EyeOff,
   ChevronDown,
   ChevronRight,
+  MessageSquare,
+  MessageSquareOff,
+  BarChart2,
 } from "lucide-react";
 
 import type Collection from "@arcgis/core/core/Collection";
@@ -65,7 +68,6 @@ const BASEMAP_OPTIONS: BasemapOption[] = [
   { id: "satellite", label: "Satellite Imagery 3D", icon: Globe },
 ];
 
-// ✅ PERFORMANCE FIX: Extracted constants outside of component loops
 const AIRBORNE_STATUSES = [
   "AIRBORNE",
   "EN_ROUTE",
@@ -198,21 +200,59 @@ export function ArcGISMap() {
   const mapFilters = useAirportStore((state) => state.mapFilters);
   const toggleMapFilter = useAirportStore((state) => state.toggleMapFilter);
 
-  // ✅ PERFORMANCE FIX: Memoize array operations so they don't run 60 times a second
+  // Exclude planes, and derived tooltips/cylinders from the pure sensor list
   const filterKeys = useMemo(() => Object.keys(mapFilters), [mapFilters]);
   const sensorKeys = useMemo(
-    () => filterKeys.filter((k) => k !== "planes"),
+    () =>
+      filterKeys.filter(
+        (k) =>
+          !["planes", "tooltips", "cylinders"].includes(k) &&
+          !k.startsWith("tooltips_") &&
+          !k.startsWith("cylinders_"),
+      ),
     [filterKeys],
   );
+
   const allSensorsVisible = useMemo(
-    () => sensorKeys.every((k) => mapFilters[k]),
+    () => sensorKeys.every((k) => mapFilters[k] !== false),
+    [sensorKeys, mapFilters],
+  );
+
+  const allSensorTooltipsVisible = useMemo(
+    () => sensorKeys.every((k) => mapFilters[`tooltips_${k}`] !== false),
+    [sensorKeys, mapFilters],
+  );
+
+  const allSensorCylindersVisible = useMemo(
+    () => sensorKeys.every((k) => mapFilters[`cylinders_${k}`] !== false),
     [sensorKeys, mapFilters],
   );
 
   const handleToggleAllSensors = () => {
     const targetState = !allSensorsVisible;
     sensorKeys.forEach((k) => {
-      if (mapFilters[k] !== targetState) toggleMapFilter(k);
+      if (
+        (mapFilters[k] !== false && !targetState) ||
+        (mapFilters[k] === false && targetState)
+      ) {
+        toggleMapFilter(k);
+      }
+    });
+  };
+
+  const handleToggleAllSensorTooltips = () => {
+    const targetState = !allSensorTooltipsVisible;
+    sensorKeys.forEach((k) => {
+      const current = mapFilters[`tooltips_${k}`] !== false;
+      if (current !== targetState) toggleMapFilter(`tooltips_${k}`);
+    });
+  };
+
+  const handleToggleAllSensorCylinders = () => {
+    const targetState = !allSensorCylindersVisible;
+    sensorKeys.forEach((k) => {
+      const current = mapFilters[`cylinders_${k}`] !== false;
+      if (current !== targetState) toggleMapFilter(`cylinders_${k}`);
     });
   };
 
@@ -233,7 +273,11 @@ export function ArcGISMap() {
     const focusedId = store.selectedEntityId;
     const focusedType = store.selectedEntityType;
 
-    if (store.mapFilters["planes"] !== false) {
+    // Check specific Plane configurations
+    const planesVisible = store.mapFilters["planes"] !== false;
+    const planeTooltipsOn = store.mapFilters["tooltips_planes"] !== false;
+
+    if (planesVisible && planeTooltipsOn) {
       store.planes.forEach((plane) => {
         if (!isPlaneOnGround(plane)) return;
         if (focusedType === "plane" && focusedId && focusedId !== plane.id)
@@ -258,8 +302,13 @@ export function ArcGISMap() {
       });
     }
 
+    // Check individual Sensor configurations
     store.sensors.forEach((sensor) => {
-      if (store.mapFilters[sensor.type] === false) return;
+      const sensorTypeVisible = store.mapFilters[sensor.type] !== false;
+      const sensorTooltipOn =
+        store.mapFilters[`tooltips_${sensor.type}`] !== false;
+
+      if (!sensorTypeVisible || !sensorTooltipOn) return;
       if (focusedType === "sensor" && focusedId && focusedId !== sensor.id)
         return;
 
@@ -544,7 +593,6 @@ export function ArcGISMap() {
 
               const cameraHeading = view.camera.heading || 0;
 
-              // ✅ PERFORMANCE FIX: Build dictionary once per frame for O(1) lookup
               const currentPlanes = useAirportStore.getState().planes;
               const planeMap = new Map(currentPlanes.map((p) => [p.id, p]));
 
@@ -554,7 +602,6 @@ export function ArcGISMap() {
                   const statusStr = (plane.status || "UNKNOWN").toUpperCase();
                   const originStr = (plane.origin || "").toUpperCase();
 
-                  // ✅ PERFORMANCE FIX: using the extracted constant array
                   const isHomeOrigin = HOME_ORIGINS.some((kw) =>
                     originStr.includes(kw),
                   );
@@ -589,7 +636,7 @@ export function ArcGISMap() {
     init();
     return () => {
       destroyed = true;
-      cancelAnimationFrame(rAFId); // ✅ PERFORMANCE FIX: Prevent memory leak of rAF
+      cancelAnimationFrame(rAFId);
       if (watchHandle) watchHandle.remove();
       if (handleMapReset)
         window.removeEventListener("reset-map-view", handleMapReset);
@@ -600,7 +647,7 @@ export function ArcGISMap() {
     };
   }, [currentBasemap, syncTooltips, selectEntity]);
 
-  // ✅ CAMERA ZOOM CONTROLLER
+  // CAMERA ZOOM CONTROLLER
   useEffect(() => {
     if (!isMapReady || !viewRef.current || isImmersiveActive) return;
 
@@ -637,7 +684,7 @@ export function ArcGISMap() {
     planes,
   ]);
 
-  // ✅ IMMERSIVE NATIVE 3D HEATMAP ENGINE
+  // IMMERSIVE NATIVE 3D HEATMAP ENGINE
   useEffect(() => {
     if (
       !isMapReady ||
@@ -810,7 +857,7 @@ export function ArcGISMap() {
     }
   }, [isImmersiveActive, focusedSensor?.type, isMapReady, sensors]);
 
-  // ✅ SENSOR LOOP: Draws the 3D WebGL Cylinders (ISOLATION APPLIED)
+  // SENSOR LOOP: Draws the 3D WebGL Cylinders (ISOLATION APPLIED)
   useEffect(() => {
     if (!isMapReady || !sensorLayerRef.current) return;
 
@@ -835,9 +882,13 @@ export function ArcGISMap() {
         selectedEntityType === "sensor" &&
         !!selectedEntityId &&
         selectedEntityId !== g.attributes.id;
+
+      const filterType = g.attributes.filterType;
+
       return Boolean(
         !currentSensorIds.has(g.attributes.id) ||
-        mapFilters[g.attributes.filterType] === false ||
+        mapFilters[filterType] === false ||
+        mapFilters[`cylinders_${filterType}`] === false ||
         isAnotherSelected,
       );
     });
@@ -850,7 +901,10 @@ export function ArcGISMap() {
         selectedEntityType === "sensor" &&
         !!selectedEntityId &&
         selectedEntityId !== sensor.id;
+
+      // Individual toggle checks
       if (mapFilters[sensor.type] === false || isAnotherSelected) return;
+      if (mapFilters[`cylinders_${sensor.type}`] === false) return;
 
       const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
       const dynamicHeight = Math.max(colProps.height, 10);
@@ -908,7 +962,7 @@ export function ArcGISMap() {
     selectedEntityType,
   ]);
 
-  // ✅ PLANES LOOP
+  // PLANES LOOP
   useEffect(() => {
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
@@ -948,7 +1002,6 @@ export function ArcGISMap() {
       const statusStr = (plane.status || "UNKNOWN").toUpperCase();
       const originStr = (plane.origin || "").toUpperCase();
 
-      // ✅ PERFORMANCE FIX: using the extracted constant array
       const isHomeOrigin = HOME_ORIGINS.some((kw) => originStr.includes(kw));
 
       let isOutbound = false;
@@ -1022,7 +1075,6 @@ export function ArcGISMap() {
         }
       }
 
-      // ✅ PERFORMANCE FIX: Extract constant strings check
       const isMovingOnGround = GROUND_STATUSES.includes(statusStr);
       const isAtGroundLevel = plane.altitude < 50;
       const isValidCoordinate = getLon(plane) !== 0 && getLat(plane) !== 0;
@@ -1128,9 +1180,9 @@ export function ArcGISMap() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   transition={{ duration: 0.15 }}
-                  className="mb-3 w-56 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-xl overflow-hidden flex flex-col origin-bottom-right"
+                  className="mb-3 w-72 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-xl overflow-hidden flex flex-col origin-bottom-right"
                 >
-                  <div className="bg-gray-50/80 p-2.5 border-b border-gray-200/60 flex items-center justify-between">
+                  <div className="bg-gray-50/80 p-2.5 border-b border-gray-200/60 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <Filter size={14} className="text-[#1e3a8a]" />
                       <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
@@ -1144,27 +1196,53 @@ export function ArcGISMap() {
                       <X size={14} />
                     </button>
                   </div>
-                  <div className="p-2 max-h-64 overflow-y-auto custom-scrollbar flex flex-col gap-1">
-                    <button
-                      onClick={() => toggleMapFilter("planes")}
-                      className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${mapFilters["planes"] ? "bg-blue-50 text-[#1e3a8a]" : "text-gray-500 hover:bg-gray-50"}`}
-                    >
-                      <span className="truncate uppercase text-[10px] tracking-widest">
+
+                  {/* DYNAMIC EXPANDABLE CONTAINER WITH CUSTOM SCROLLBAR */}
+                  <div className="p-2 max-h-[70vh] overflow-y-auto custom-scrollbar flex flex-col gap-1">
+                    {/* PLANES SECTION */}
+                    <div className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-gray-50">
+                      <span className="truncate uppercase text-[10px] tracking-widest text-gray-700">
                         Planes
                       </span>
-                      {mapFilters["planes"] ? (
-                        <Eye size={14} />
-                      ) : (
-                        <EyeOff size={14} className="text-gray-400" />
-                      )}
-                    </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          title="Toggle Plane Tooltips"
+                          onClick={() => toggleMapFilter("tooltips_planes")}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {mapFilters["tooltips_planes"] !== false ? (
+                            <MessageSquare
+                              size={14}
+                              className="text-[#1e3a8a]"
+                            />
+                          ) : (
+                            <MessageSquareOff
+                              size={14}
+                              className="text-gray-300"
+                            />
+                          )}
+                        </button>
+                        <button
+                          title="Toggle Plane Visibility"
+                          onClick={() => toggleMapFilter("planes")}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {mapFilters["planes"] !== false ? (
+                            <Eye size={14} className="text-[#1e3a8a]" />
+                          ) : (
+                            <EyeOff size={14} className="text-gray-300" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
 
+                    {/* SENSORS HEADER SECTION */}
                     <div
-                      className={`flex items-center justify-between rounded-xl transition-all ${allSensorsVisible ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                      className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${allSensorsVisible ? "bg-blue-50" : "hover:bg-gray-50"}`}
                     >
                       <button
                         onClick={() => setIsSensorsExpanded(!isSensorsExpanded)}
-                        className={`flex items-center gap-2 px-3 py-2 flex-1 text-xs font-bold ${allSensorsVisible ? "text-[#1e3a8a]" : "text-gray-500"}`}
+                        className={`flex items-center gap-2 flex-1 text-xs font-bold ${allSensorsVisible ? "text-[#1e3a8a]" : "text-gray-500"}`}
                       >
                         {isSensorsExpanded ? (
                           <ChevronDown size={14} />
@@ -1175,43 +1253,134 @@ export function ArcGISMap() {
                           Sensors
                         </span>
                       </button>
-                      <button
-                        onClick={handleToggleAllSensors}
-                        className={`px-3 py-2 ${allSensorsVisible ? "text-[#1e3a8a]" : "text-gray-400"}`}
-                      >
-                        {allSensorsVisible ? (
-                          <Eye size={14} />
-                        ) : (
-                          <EyeOff size={14} />
-                        )}
-                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          title="Toggle All Sensor Cylinders"
+                          onClick={handleToggleAllSensorCylinders}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          <BarChart2
+                            size={14}
+                            className={
+                              allSensorCylindersVisible
+                                ? "text-[#1e3a8a]"
+                                : "text-gray-300"
+                            }
+                          />
+                        </button>
+                        <button
+                          title="Toggle All Sensor Tooltips"
+                          onClick={handleToggleAllSensorTooltips}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {allSensorTooltipsVisible ? (
+                            <MessageSquare
+                              size={14}
+                              className="text-[#1e3a8a]"
+                            />
+                          ) : (
+                            <MessageSquareOff
+                              size={14}
+                              className="text-gray-300"
+                            />
+                          )}
+                        </button>
+                        <button
+                          title="Toggle All Sensor Visibility"
+                          onClick={handleToggleAllSensors}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {allSensorsVisible ? (
+                            <Eye size={14} className="text-[#1e3a8a]" />
+                          ) : (
+                            <EyeOff size={14} className="text-gray-300" />
+                          )}
+                        </button>
+                      </div>
                     </div>
 
+                    {/* EXPANDED INDIVIDUAL SENSORS LIST */}
                     <AnimatePresence>
                       {isSensorsExpanded && (
                         <motion.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: "auto", opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
-                          className="flex flex-col gap-1 overflow-hidden"
+                          className="flex flex-col gap-0.5 overflow-hidden ml-4 pl-2 border-l-2 border-gray-100 mt-1 mb-2"
                         >
                           {sensorKeys.map((key) => {
-                            const isActive = mapFilters[key];
+                            const isVisOn = mapFilters[key] !== false;
+                            const isTooltipOn =
+                              mapFilters[`tooltips_${key}`] !== false;
+                            const isCylinderOn =
+                              mapFilters[`cylinders_${key}`] !== false;
+
                             return (
-                              <button
+                              <div
                                 key={key}
-                                onClick={() => toggleMapFilter(key)}
-                                className={`flex items-center justify-between pl-8 pr-3 py-1.5 rounded-xl text-[10px] font-bold transition-all ${isActive ? "text-[#1e3a8a] bg-blue-50/50" : "text-gray-500 hover:bg-gray-50"}`}
+                                className="flex items-center justify-between py-1.5 px-2 rounded-xl transition-all hover:bg-gray-50"
                               >
-                                <span className="truncate uppercase">
+                                <span
+                                  className={`text-[9px] font-bold uppercase truncate w-24 ${isVisOn ? "text-gray-700" : "text-gray-400"}`}
+                                >
                                   {key.replace(/_/g, " ")}
                                 </span>
-                                {isActive ? (
-                                  <Eye size={12} />
-                                ) : (
-                                  <EyeOff size={12} className="opacity-50" />
-                                )}
-                              </button>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    title={`Toggle ${key} Cylinders`}
+                                    onClick={() =>
+                                      toggleMapFilter(`cylinders_${key}`)
+                                    }
+                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                                  >
+                                    <BarChart2
+                                      size={12}
+                                      className={
+                                        isCylinderOn
+                                          ? "text-[#1e3a8a]"
+                                          : "text-gray-300"
+                                      }
+                                    />
+                                  </button>
+                                  <button
+                                    title={`Toggle ${key} Tooltips`}
+                                    onClick={() =>
+                                      toggleMapFilter(`tooltips_${key}`)
+                                    }
+                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                                  >
+                                    {isTooltipOn ? (
+                                      <MessageSquare
+                                        size={12}
+                                        className="text-[#1e3a8a]"
+                                      />
+                                    ) : (
+                                      <MessageSquareOff
+                                        size={12}
+                                        className="text-gray-300"
+                                      />
+                                    )}
+                                  </button>
+                                  <button
+                                    title={`Toggle ${key} Visibility`}
+                                    onClick={() => toggleMapFilter(key)}
+                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                                  >
+                                    {isVisOn ? (
+                                      <Eye
+                                        size={12}
+                                        className="text-[#1e3a8a]"
+                                      />
+                                    ) : (
+                                      <EyeOff
+                                        size={12}
+                                        className="text-gray-300"
+                                      />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
                             );
                           })}
                         </motion.div>

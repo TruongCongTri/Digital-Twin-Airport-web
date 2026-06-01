@@ -551,12 +551,12 @@ const SpatialHeatmapCard = ({
           Spatial Heatmap: {focusedSensor.type.replace("_", " ")} Topology
         </span>
         <div className="flex items-center gap-2 whitespace-nowrap flex-nowrap shrink-0">
-          <button
+          {/* <button
             onClick={() => setImmersiveActive(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1e3a8a] text-white text-[8px] font-bold uppercase tracking-widest rounded shadow hover:bg-blue-800 transition-colors cursor-pointer pointer-events-auto shrink-0"
           >
             <Layers size={10} /> View on Map
-          </button>
+          </button> */}
           <SyncBadge />
         </div>
       </div>
@@ -633,7 +633,8 @@ const SpatialHeatmapCard = ({
                 textAnchor="middle"
                 className="font-bold tracking-widest bg-white/50"
               >
-                {focusedSensor.id.split("-").pop()}
+                {/* {focusedSensor.id.split("-").pop()} */}
+                {focusedSensor.name}
               </text>
             </g>
           )}

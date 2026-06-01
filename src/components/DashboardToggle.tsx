@@ -28,7 +28,6 @@ const DEMO_SCENARIOS = [
 ] as const;
 
 export function DashboardToggle() {
-  // ✅ OPTIMIZATION: Atomic selectors prevent re-rendering when planes move
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const toggleDashboard = useAirportStore((state) => state.toggleDashboard);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
@@ -69,34 +68,22 @@ export function DashboardToggle() {
       await startScenario(scenario as Scenario);
       setSimulationMode(isClearing ? "GENERAL" : scenario);
       setIsMenuOpen(false);
-
-      if (isClearing)
-        toast.success("Normal Operations Restored", {
-          id: tId,
-          description: "All anomalies cleared.",
-        });
-      else
-        toast.success("Scenario Active!", {
-          id: tId,
-          description: "Monitoring system anomalies.",
-        });
+      toast.success(
+        isClearing ? "Normal Operations Restored" : "Scenario Active!",
+        { id: tId },
+      );
     } catch (_e) {
       toast.error("Scenario injection failed", { id: tId });
     }
   };
 
   const handleHardReset = async () => {
-    const tId = toast.loading(
-      "Flushing backend memory and rebooting engine...",
-    );
+    const tId = toast.loading("Rebooting engine...");
     try {
       await rebootSimulation();
       setSimulationMode("GENERAL");
       setIsMenuOpen(false);
-      toast.success("Engine Rebooted", {
-        id: tId,
-        description: "Memory flushed and system synced.",
-      });
+      toast.success("Engine Rebooted", { id: tId });
     } catch (e) {
       toast.error("Reboot failed", { id: tId });
     }
@@ -109,6 +96,28 @@ export function DashboardToggle() {
     simulationMode === "NONE" || simulationMode === "GENERAL";
   const isScenarioActive = !isNormalOperations;
 
+  // DESIGN DECISION: If entity is selected, render minimalist 'Close Focus' only.
+  if (selectedEntityId) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 pointer-events-auto"
+      >
+        <button
+          onClick={() => {
+            clearSelection();
+            // This triggers the same map zoom-out logic as the main title button
+            window.dispatchEvent(new CustomEvent("reset-map-view"));
+          }}
+          className="flex items-center gap-2 bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl border border-gray-700 font-bold text-sm hover:bg-gray-800 transition-all hover:scale-105 active:scale-95"
+        >
+          <X size={16} /> Close Focus
+        </button>
+      </motion.div>
+    );
+  }
+
   return (
     <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 pointer-events-none">
       <motion.button
@@ -118,7 +127,7 @@ export function DashboardToggle() {
           clearSelection();
           window.dispatchEvent(new CustomEvent("reset-map-view"));
         }}
-        className="pointer-events-auto bg-white/90 backdrop-blur-md border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-white text-xs font-bold px-4 py-2 rounded-full shadow-sm flex items-center gap-2 transition-colors"
+        className="pointer-events-auto bg-white/90 backdrop-blur-md border border-gray-200 text-gray-500 hover:text-gray-800 text-xs font-bold px-4 py-2 rounded-full shadow-sm flex items-center gap-2 transition-colors"
       >
         <Plane size={14} className="text-[#1e3a8a]" />
         Long Thanh · Digital Twin
@@ -142,27 +151,25 @@ export function DashboardToggle() {
 
         <div className="pointer-events-auto flex items-center gap-2 bg-white/95 backdrop-blur-md p-1.5 rounded-full border border-gray-200/80 shadow-lg shrink-0">
           <motion.button
-            onClick={selectedEntityId ? clearSelection : toggleDashboard}
+            onClick={toggleDashboard}
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             className={cn(
               "flex items-center gap-2.5 px-5 py-2.5 rounded-full text-sm font-semibold shadow-sm transition-colors shrink-0",
               isDashboardOpen
                 ? "bg-gray-800 text-white hover:bg-gray-700"
-                : "bg-white text-gray-800 border border-gray-200 hover:border-gray-300 hover:bg-gray-50",
+                : "bg-white text-gray-800 border border-gray-200 hover:border-gray-300",
             )}
           >
-            {selectedEntityId ? (
+            {isDashboardOpen ? (
               <>
-                <X size={15} /> Close Focus
-              </>
-            ) : isDashboardOpen ? (
-              <>
-                <X size={15} /> Close Dashboard
+                {" "}
+                <X size={15} /> Close Dashboard{" "}
               </>
             ) : (
               <>
-                <LayoutDashboard size={15} /> Dashboard
+                {" "}
+                <LayoutDashboard size={15} /> Dashboard{" "}
               </>
             )}
           </motion.button>
