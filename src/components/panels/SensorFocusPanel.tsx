@@ -32,6 +32,8 @@ import {
   LineChart as ChartIcon,
   Clock,
   Layers,
+  Droplets,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Area,
@@ -47,7 +49,6 @@ import {
   Line,
   ReferenceLine,
   Bar,
-  LineChart,
 } from "recharts";
 import {
   ChartConfig,
@@ -112,6 +113,7 @@ interface ChartDataPoint {
   tarmacTemp?: number;
   crowdDensity?: number;
   co2Level?: number;
+  humidity?: number;
   windOutdoor?: number;
   windIndoor?: number;
   structTilt?: number;
@@ -121,6 +123,7 @@ interface ChartDataPoint {
   predictedTarmacTemp?: number;
   predictedCrowdDensity?: number;
   predictedCo2Level?: number;
+  predictedHumidity?: number;
   predictedWindOutdoor?: number;
   predictedWindIndoor?: number;
   predictedStructTilt?: number;
@@ -164,7 +167,7 @@ const STATUS_COLORS: Record<string, ComponentTheme> = {
 
 const SyncBadge = ({ className = "" }: { className?: string }) => (
   <div
-    className={`flex items-center gap-1 px-1.5 py-0.5 bg-slate-50/80 backdrop-blur border border-slate-200 text-slate-400 rounded text-[7px] font-black uppercase tracking-widest shadow-sm z-10 ${className}`}
+    className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 bg-slate-50/80 backdrop-blur border border-slate-200 text-slate-400 rounded text-[7px] font-black uppercase tracking-widest shadow-sm z-10 ${className}`}
   >
     <Clock size={8} /> 5-MIN UPDATE
   </div>
@@ -547,10 +550,10 @@ const SpatialHeatmapCard = ({
         <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest flex items-center gap-2">
           Spatial Heatmap: {focusedSensor.type.replace("_", " ")} Topology
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 whitespace-nowrap flex-nowrap shrink-0">
           <button
             onClick={() => setImmersiveActive(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1e3a8a] text-white text-[8px] font-bold uppercase tracking-widest rounded shadow hover:bg-blue-800 transition-colors cursor-pointer pointer-events-auto"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1e3a8a] text-white text-[8px] font-bold uppercase tracking-widest rounded shadow hover:bg-blue-800 transition-colors cursor-pointer pointer-events-auto shrink-0"
           >
             <Layers size={10} /> View on Map
           </button>
@@ -653,7 +656,6 @@ export function SensorFocusPanel() {
     (state) => state.setImmersiveActive,
   );
 
-  // ✅ PERFORMANCE FIX: Decoupled historical arrays from rendering loop
   const [throttledHeavy, setThrottledHeavy] = useState(() => {
     const state = useAirportStore.getState();
     return {
@@ -696,24 +698,34 @@ export function SensorFocusPanel() {
     return fallbackTime;
   }, [history, fallbackTime]);
 
-  // ✅ PERFORMANCE FIX: Calculate index only when the selected sensor ID changes
   const totalSensors = useAirportStore((state) => state.sensors.length);
-  const sensorId = sensor?.id; // Extract the primitive first
+  const sensorId = sensor?.id;
 
   const currentIndex = useMemo(() => {
     return sensorId
       ? useAirportStore.getState().sensors.findIndex((s) => s.id === sensorId)
       : -1;
-  }, [sensorId]); // React compiler is happy, strictly depends on the string ID
+  }, [sensorId]);
 
-  const typeStr = String(sensor?.type || "UNKNOWN");
-  const isTilt = typeStr.includes("TILT");
+  // --- Strict Environmental Categorization ---
+  const typeStr = String(sensor?.type || "UNKNOWN").toUpperCase();
+
+  // Outdoor Entities
+  const isTilt = typeStr === "TILT_STRUCTURAL" || typeStr.includes("TILT");
+  const isOutdoorWind = typeStr === "WIND_OUTDOOR";
+  const isTarmacTemp = typeStr === "TARMAC_TEMP";
+
+  // Indoor Entities
+  const isIndoorWind = typeStr === "WIND_INDOOR";
+  const isIndoorTemp = typeStr === "TEMPERATURE" || typeStr === "INDOOR_TEMP";
+  const isCO2 = typeStr === "CO2";
+  const isHumidity = typeStr === "HUMIDITY";
+  const isCrowd = typeStr === "CAMERA_AI_CROWD" || typeStr.includes("CROWD");
+
+  // General fallback groupings
   const isLight = typeStr.includes("LIGHT");
-  const isWind = typeStr.includes("WIND");
-  const isCrowd = typeStr.includes("CROWD");
-  const isTemp = typeStr.includes("TEMP");
-  const isAir = typeStr.includes("CO2") || typeStr.includes("HUMIDITY");
-  const isEnv = isTemp || isAir;
+  const isTemp = isIndoorTemp || isTarmacTemp;
+  const isWind = isIndoorWind || isOutdoorWind;
 
   const status = sensor?.status || "UNKNOWN";
   const theme = STATUS_COLORS[status] || STATUS_COLORS["DEFAULT"];
@@ -768,26 +780,14 @@ export function SensorFocusPanel() {
         realValue: val,
         value: val,
         gust: val * 1.4,
-        indoorTemp: isTemp ? val : 22 + noise,
-        tarmacTemp: isTemp ? val + Math.sin(i) * 5 + 8 : 35 + noise,
-        crowdDensity:
-          isAir || isCrowd
-            ? val > 0 && isCrowd
-              ? val
-              : Math.floor(200 + noise * 50)
-            : Math.floor(150 + noise * 20),
-        co2Level:
-          isAir || isCrowd ? (isAir ? val : 400 + val * 2) : 420 + noise * 5,
-        windOutdoor:
-          isWind || isTilt ? (isWind ? val : 15 + noise * 3) : 10 + noise,
-        windIndoor:
-          isWind || isTilt ? (isWind ? val * 0.2 : 3 + noise * 0.5) : 2 + noise,
-        structTilt:
-          isWind || isTilt
-            ? isTilt
-              ? val
-              : 0.02 + Math.abs(noise) * 0.005
-            : 0.01,
+        indoorTemp: isIndoorTemp ? val : 22 + noise,
+        tarmacTemp: isTarmacTemp ? val : 35 + noise,
+        crowdDensity: isCrowd ? val : Math.floor(200 + noise * 50),
+        co2Level: isCO2 ? val : 420 + noise * 5,
+        humidity: isHumidity ? val : 50 + noise * 3,
+        windOutdoor: isOutdoorWind ? val : 10 + noise,
+        windIndoor: isIndoorWind ? val : 2 + noise,
+        structTilt: isTilt ? val : 0.01 + Math.abs(noise) * 0.005,
         lightDensity: isLight ? val : 800 + noise * 100,
       });
     }
@@ -801,6 +801,7 @@ export function SensorFocusPanel() {
         lastRealPoint.predictedTarmacTemp = lastRealPoint.tarmacTemp;
         lastRealPoint.predictedCrowdDensity = lastRealPoint.crowdDensity;
         lastRealPoint.predictedCo2Level = lastRealPoint.co2Level;
+        lastRealPoint.predictedHumidity = lastRealPoint.humidity;
         lastRealPoint.predictedWindOutdoor = lastRealPoint.windOutdoor;
         lastRealPoint.predictedWindIndoor = lastRealPoint.windIndoor;
         lastRealPoint.predictedStructTilt = lastRealPoint.structTilt;
@@ -828,36 +829,16 @@ export function SensorFocusPanel() {
             (pVal ?? 0) + offset,
           ] as [number, number],
           isPrediction: true,
-          predictedIndoorTemp: isTemp ? pVal : 22 + noise,
-          predictedTarmacTemp: isTemp
-            ? (pVal ?? 0) + Math.sin(i) * 5 + 8
-            : 35 + noise,
-          predictedCrowdDensity:
-            isAir || isCrowd
-              ? (pVal ?? 0) > 0 && isCrowd
-                ? pVal
-                : Math.floor(200 + noise * 50)
-              : Math.floor(150 + noise * 20),
-          predictedCo2Level:
-            isAir || isCrowd
-              ? isAir
-                ? pVal
-                : 400 + (pVal ?? 0) * 2
-              : 420 + noise * 5,
-          predictedWindOutdoor:
-            isWind || isTilt ? (isWind ? pVal : 15 + noise * 3) : 10 + noise,
-          predictedWindIndoor:
-            isWind || isTilt
-              ? isWind
-                ? (pVal ?? 0) * 0.2
-                : 3 + noise * 0.5
-              : 2 + noise,
-          predictedStructTilt:
-            isWind || isTilt
-              ? isTilt
-                ? pVal
-                : 0.02 + Math.abs(noise) * 0.005
-              : 0.01,
+          predictedIndoorTemp: isIndoorTemp ? pVal : 22 + noise,
+          predictedTarmacTemp: isTarmacTemp ? pVal : 35 + noise,
+          predictedCrowdDensity: isCrowd ? pVal : Math.floor(200 + noise * 50),
+          predictedCo2Level: isCO2 ? pVal : 420 + noise * 5,
+          predictedHumidity: isHumidity
+            ? pVal
+            : 50 + noise * 3 + Math.sin(i) * 2,
+          predictedWindOutdoor: isOutdoorWind ? pVal : 10 + noise,
+          predictedWindIndoor: isIndoorWind ? pVal : 2 + noise,
+          predictedStructTilt: isTilt ? pVal : 0.01 + Math.abs(noise) * 0.005,
           predictedLightDensity: isLight ? pVal : 800 + noise * 100,
         };
       });
@@ -865,18 +846,7 @@ export function SensorFocusPanel() {
     }
 
     return { chartData: baseData, nowLabel: nowLabelStr };
-  }, [
-    history,
-    forecast,
-    isTemp,
-    isAir,
-    isWind,
-    isTilt,
-    isCrowd,
-    isLight,
-    currentVal,
-    nowMs,
-  ]);
+  }, [history, forecast, typeStr, currentVal, nowMs]);
 
   const windRadarData = useMemo(() => {
     const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -894,6 +864,138 @@ export function SensorFocusPanel() {
       };
     });
   }, [chartData, currentVal, history.length, forecast]);
+
+  const dualWindRadarData = useMemo(() => {
+    const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    return directions.map((dir, i) => {
+      const outVal =
+        chartData[i % Math.max(1, chartData.length)]?.windOutdoor || 10;
+      const inVal =
+        chartData[i % Math.max(1, chartData.length)]?.windIndoor || 2;
+      return {
+        direction: dir,
+        outdoor: outVal * (1 + Math.sin(i) * 0.2),
+        indoor: inVal * (1 + Math.cos(i) * 0.2),
+      };
+    });
+  }, [chartData]);
+
+  const aiRecommendations = useMemo(() => {
+    const recs = [];
+    const nextVal = forecast?.predictions?.[0]?.predictedValue || currentVal;
+    const trend = nextVal - currentVal;
+
+    if (isCrowd) {
+      if (trend > 10)
+        recs.push({
+          priority: "HIGH",
+          text: "Crowd surge predicted. Deploy 2 additional security personnel.",
+        });
+      else if (trend < -10)
+        recs.push({
+          priority: "LOW",
+          text: "Traffic clearing. Begin partial staff rotation.",
+        });
+      else
+        recs.push({
+          priority: "LOW",
+          text: "Flow stable. Maintain current staffing levels.",
+        });
+    } else if (isCO2) {
+      if (nextVal > 600)
+        recs.push({
+          priority: "MEDIUM",
+          text: "CO2 levels rising. Open fresh air intake damper to 40%.",
+        });
+      else
+        recs.push({
+          priority: "LOW",
+          text: "Air quality optimal. No HVAC adjustments needed.",
+        });
+    } else if (isOutdoorWind) {
+      if (nextVal > 25)
+        recs.push({
+          priority: "CRITICAL",
+          text: "High wind warning. Secure loose tarmac equipment immediately.",
+        });
+      else if (nextVal > 15)
+        recs.push({
+          priority: "MEDIUM",
+          text: "Elevated winds. Alert baggage handling crews.",
+        });
+      else
+        recs.push({
+          priority: "LOW",
+          text: "Wind conditions safe for standard operations.",
+        });
+    } else if (isIndoorWind) {
+      if (nextVal > 5)
+        recs.push({
+          priority: "MEDIUM",
+          text: "Draft detected. Reduce local HVAC blower fan speed.",
+        });
+      else
+        recs.push({ priority: "LOW", text: "Indoor air circulation nominal." });
+    } else if (isTarmacTemp) {
+      if (nextVal > 40)
+        recs.push({
+          priority: "HIGH",
+          text: "Extreme surface heat. Increase aircraft turnaround cooling.",
+        });
+      else
+        recs.push({
+          priority: "LOW",
+          text: "Surface temperature within safe operational limits.",
+        });
+    } else if (isIndoorTemp) {
+      if (nextVal > 25)
+        recs.push({
+          priority: "MEDIUM",
+          text: "Zone warming up. Increase cooling load by 10%.",
+        });
+      else if (nextVal < 20)
+        recs.push({
+          priority: "MEDIUM",
+          text: "Zone over-cooled. Reduce chiller output.",
+        });
+      else
+        recs.push({
+          priority: "LOW",
+          text: "Temperature stable. Energy saving mode active.",
+        });
+    } else if (isHumidity) {
+      if (nextVal > 60)
+        recs.push({
+          priority: "MEDIUM",
+          text: "High humidity. Activate dehumidifier cycle in HVAC.",
+        });
+      else recs.push({ priority: "LOW", text: "Humidity nominal." });
+    } else if (isTilt) {
+      if (nextVal > 0.05)
+        recs.push({
+          priority: "CRITICAL",
+          text: "Deflection exceeding bounds. Inspect structural joints.",
+        });
+      else recs.push({ priority: "LOW", text: "Structural load nominal." });
+    } else {
+      recs.push({
+        priority: "LOW",
+        text: "All parameters nominal. Continue automated monitoring.",
+      });
+    }
+    return recs;
+  }, [
+    isCrowd,
+    isCO2,
+    isOutdoorWind,
+    isIndoorWind,
+    isTarmacTemp,
+    isIndoorTemp,
+    isHumidity,
+    isTilt,
+    forecast,
+    currentVal,
+  ]);
 
   const vendorId = sensor?.id.split("-")[0].toUpperCase() || "UNKNOWN";
 
@@ -916,6 +1018,9 @@ export function SensorFocusPanel() {
     co2Level: { label: "CO2 (ppm)", color: "#10b981" },
     predictedCo2Level: { label: "Predicted CO2 (ppm)", color: "#6ee7b7" },
 
+    humidity: { label: "Humidity (%)", color: "#06b6d4" },
+    predictedHumidity: { label: "Predicted Hum. (%)", color: "#67e8f9" },
+
     windOutdoor: { label: "Outdoor Wind (kts)", color: "#3b82f6" },
     predictedWindOutdoor: {
       label: "Predicted Outdoor (kts)",
@@ -933,6 +1038,9 @@ export function SensorFocusPanel() {
 
     speed: { label: "Real Speed", color: "#1e3a8a" },
     predictedSpeed: { label: "Forecast Speed", color: "#f59e0b" },
+
+    outdoor: { label: "Outdoor Matrix", color: "#3b82f6" },
+    indoor: { label: "Indoor Matrix", color: "#6366f1" },
   } satisfies ChartConfig;
 
   if (!isDashboardOpen || !sensor) return null;
@@ -951,7 +1059,6 @@ export function SensorFocusPanel() {
     );
   }
 
-  // ✅ PERFORMANCE FIX: Avoid reading Zustand context array in render loop
   const handlePrev = () => {
     const sensors = useAirportStore.getState().sensors;
     selectEntity(
@@ -969,6 +1076,7 @@ export function SensorFocusPanel() {
 
   return (
     <>
+      {/* LEFT PANEL */}
       <BentoPanel
         direction="left"
         isOpen={true}
@@ -1018,22 +1126,19 @@ export function SensorFocusPanel() {
             </div>
             <div className="flex flex-col items-end">
               <div className="w-10 h-10 rounded-full border-2 border-gray-200 flex items-center justify-center bg-white shadow-inner">
-                {typeStr.includes("TEMP") && (
-                  <Thermometer size={18} className="text-gray-400" />
-                )}
+                {isTemp && <Thermometer size={18} className="text-gray-400" />}
                 {isWind && (
                   <NavigationIcon size={18} className="text-gray-400" />
                 )}
-                {(typeStr.includes("CO2") || typeStr.includes("HUMIDITY")) && (
-                  <CircleDashed size={18} className="text-gray-400" />
-                )}
+                {isCO2 && <CircleDashed size={18} className="text-gray-400" />}
+                {isHumidity && <Droplets size={18} className="text-gray-400" />}
                 {isTilt && <Shield size={18} className="text-gray-400" />}
                 {isCrowd && <Users size={18} className="text-gray-400" />}
                 {isLight && <Sun size={18} className="text-gray-400" />}
-                {!typeStr.includes("TEMP") &&
+                {!isTemp &&
                   !isWind &&
-                  !typeStr.includes("CO2") &&
-                  !typeStr.includes("HUMIDITY") &&
+                  !isCO2 &&
+                  !isHumidity &&
                   !isTilt &&
                   !isCrowd &&
                   !isLight && <Wifi size={18} className="text-gray-400" />}
@@ -1076,14 +1181,13 @@ export function SensorFocusPanel() {
           >
             <div className="flex items-center justify-center py-6 relative overflow-hidden bg-gray-50 border border-gray-200 rounded-md shadow-inner group-hover:bg-blue-50 transition-colors">
               <div className="absolute inset-0 flex items-center justify-center opacity-5 group-hover:opacity-10 transition-opacity">
-                {isEnv && <Thermometer size={100} />}
+                {isTemp && <Thermometer size={100} />}
                 {isWind && <NavigationIcon size={100} />}
                 {isTilt && <Shield size={100} />}
                 {isCrowd && <Users size={100} />}
                 {isLight && <Sun size={100} />}
-                {!isEnv && !isWind && !isTilt && !isCrowd && !isLight && (
-                  <Wifi size={100} />
-                )}
+                {isCO2 && <CircleDashed size={100} />}
+                {isHumidity && <Droplets size={100} />}
               </div>
               <div className="flex flex-col items-center z-10">
                 <div className="text-6xl font-black font-mono text-gray-800 tracking-tighter group-hover:text-[#1e3a8a] transition-colors">
@@ -1151,15 +1255,7 @@ export function SensorFocusPanel() {
         </HardwareReceiptCard>
       </BentoPanel>
 
-      {!isAnalysisOpen && (
-        <button
-          onClick={() => setIsAnalysisOpen(true)}
-          className="absolute top-20 right-[472px] z-40 w-11 h-11 rounded-xl shadow-lg border flex items-center justify-center transition-all duration-300 pointer-events-auto bg-white/95 backdrop-blur-md text-[#1e3a8a] border-gray-200/80 hover:bg-blue-50"
-        >
-          <ChartIcon size={20} />
-        </button>
-      )}
-
+      {/* RIGHT PANEL */}
       <BentoPanel
         direction="right"
         isOpen={true}
@@ -1182,16 +1278,54 @@ export function SensorFocusPanel() {
           )}
         </div>
 
+        {/* AI Recommendations Box */}
         <HardwareReceiptCard
-          title={
-            isWind
-              ? "Wind Dynamics Log"
-              : isCrowd
-                ? "Crowd Flow Log"
-                : isTilt
-                  ? "Structural Deflection Log"
-                  : "Environmental Log"
-          }
+          title="AI Recommended Actions"
+          vendorId={vendorId}
+          icon={BrainCircuit}
+          footerText="PREDICTIVE LOGIC ENGINE"
+          theme={{
+            ...theme,
+            hex: "#8b5cf6",
+            bg: "bg-purple-50",
+            text: "text-purple-700",
+            border: "border-purple-200",
+            solidBg: "bg-purple-500",
+          }}
+        >
+          <div className="flex flex-col gap-2 pt-1 pb-1">
+            {aiRecommendations.map((rec, i) => (
+              <div
+                key={i}
+                className="flex gap-3 items-center p-2.5 rounded-lg bg-white border border-gray-100 shadow-sm relative overflow-hidden group"
+              >
+                <div
+                  className={`absolute left-0 top-0 bottom-0 w-1 ${rec.priority === "CRITICAL" ? "bg-red-500" : rec.priority === "HIGH" ? "bg-orange-500" : rec.priority === "MEDIUM" ? "bg-amber-500" : "bg-green-500"}`}
+                />
+                <div className="ml-1 flex items-center justify-center text-gray-400 group-hover:text-[#1e3a8a] transition-colors">
+                  {rec.priority === "CRITICAL" || rec.priority === "HIGH" ? (
+                    <AlertTriangle size={16} />
+                  ) : (
+                    <Activity size={16} />
+                  )}
+                </div>
+                <div className="flex flex-col flex-1">
+                  <span
+                    className={`text-[9px] font-bold tracking-widest ${rec.priority === "CRITICAL" ? "text-red-500" : rec.priority === "HIGH" ? "text-orange-500" : rec.priority === "MEDIUM" ? "text-amber-500" : "text-green-600"}`}
+                  >
+                    {rec.priority} PRIORITY
+                  </span>
+                  <span className="text-xs font-mono font-bold text-gray-800 leading-tight mt-0.5">
+                    {rec.text}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </HardwareReceiptCard>
+
+        <HardwareReceiptCard
+          title={`${typeStr.replace("_", " ")} Dynamics Log`}
           vendorId={vendorId}
           icon={Activity}
           footerText="RECORDING ACTIVE"
@@ -1201,71 +1335,72 @@ export function SensorFocusPanel() {
             className="flex flex-col gap-6 w-full -ml-3 mt-2"
             data-cursor="crosshair"
           >
-            {isEnv && (
-              <div className="relative w-full">
-                <SyncBadge className="absolute top-0 right-4" />
-                <ChartContainer config={configMap} className="h-48 w-full pt-4">
-                  <ComposedChart
-                    data={chartData}
-                    margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
-                  >
-                    <defs>
-                      <linearGradient id="colorEnv" x1="0" y1="0" x2="0" y2="1">
-                        <stop
-                          offset="0%"
-                          stopColor={theme.hex}
-                          stopOpacity={0.6}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor={theme.hex}
-                          stopOpacity={0.0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      vertical={false}
-                      stroke="#d1d5db"
-                    />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                      domain={["auto", "auto"]}
-                    />
-                    <ChartTooltip
-                      content={<ChartTooltipContent indicator="line" />}
-                    />
-
-                    {nowLabel && (
-                      <ReferenceLine
-                        x={nowLabel}
-                        stroke="#ef4444"
-                        strokeDasharray="3 3"
-                        label={{
-                          position: "insideTopLeft",
-                          value: "FORECAST",
-                          fill: "#ef4444",
-                          fontSize: 9,
-                        }}
+            <div className="relative w-full">
+              <SyncBadge className="absolute top-0 right-4" />
+              <ChartContainer config={configMap} className="h-48 w-full pt-4">
+                <ComposedChart
+                  data={chartData}
+                  margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="colorEnv" x1="0" y1="0" x2="0" y2="1">
+                      <stop
+                        offset="0%"
+                        stopColor={theme.hex}
+                        stopOpacity={0.6}
                       />
-                    )}
-                    <Area
-                      type="monotone"
-                      dataKey="confRange"
-                      stroke="none"
-                      fill="#f59e0b"
-                      fillOpacity={0.15}
-                      isAnimationActive={false}
-                    />
+                      <stop
+                        offset="100%"
+                        stopColor={theme.hex}
+                        stopOpacity={0.0}
+                      />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    vertical={false}
+                    stroke="#d1d5db"
+                  />
+                  <XAxis
+                    dataKey="time"
+                    tick={{ fontSize: 9, fill: "#64748b" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 9, fill: "#64748b" }}
+                    tickLine={false}
+                    axisLine={false}
+                    domain={["auto", "auto"]}
+                  />
+                  <ChartTooltip
+                    content={<ChartTooltipContent indicator="line" />}
+                  />
 
+                  {nowLabel && (
+                    <ReferenceLine
+                      x={nowLabel}
+                      stroke="#ef4444"
+                      strokeDasharray="3 3"
+                      label={{
+                        position: "insideTopLeft",
+                        value: "FORECAST",
+                        fill: "#ef4444",
+                        fontSize: 9,
+                      }}
+                    />
+                  )}
+
+                  <Area
+                    type="step"
+                    dataKey="confRange"
+                    stroke="none"
+                    fill="#f59e0b"
+                    fillOpacity={0.15}
+                    isAnimationActive={false}
+                  />
+
+                  {isTemp && (
                     <Area
                       type="monotone"
                       dataKey="realValue"
@@ -1275,86 +1410,48 @@ export function SensorFocusPanel() {
                       fill="url(#colorEnv)"
                       isAnimationActive={false}
                     />
-                    <Line
-                      type="monotone"
-                      dataKey="predictedValue"
-                      stroke="var(--color-predictedValue)"
-                      strokeWidth={2.5}
-                      strokeDasharray="5 5"
-                      dot={false}
+                  )}
+                  {isCO2 && (
+                    <Bar
+                      dataKey="realValue"
+                      fill="var(--color-realValue)"
+                      radius={[4, 4, 0, 0]}
                       isAnimationActive={false}
                     />
-                  </ComposedChart>
-                </ChartContainer>
-              </div>
-            )}
-
-            {isTilt && (
-              <div className="relative w-full">
-                <SyncBadge className="absolute top-0 right-4" />
-                <ChartContainer config={configMap} className="h-48 w-full pt-4">
-                  <ComposedChart
-                    data={chartData}
-                    margin={{ left: -10, right: 10, top: 20, bottom: 0 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      vertical={true}
-                      stroke="#e2e8f0"
+                  )}
+                  {isHumidity && (
+                    <Area
+                      type="monotone"
+                      dataKey="realValue"
+                      stroke="var(--color-realValue)"
+                      strokeWidth={3}
+                      fillOpacity={1}
+                      fill="url(#colorEnv)"
+                      isAnimationActive={false}
                     />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      domain={["dataMin - 0.05", "dataMax + 0.05"]}
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <ChartTooltip content={<ChartTooltipContent />} />
-
-                    <ReferenceLine
-                      y={currentVal * 1.2}
-                      stroke="red"
-                      strokeDasharray="3 3"
-                      label={{
-                        position: "insideTopLeft",
-                        value: "UCL LIMIT",
-                        fill: "red",
-                        fontSize: 9,
-                      }}
-                    />
-                    <ReferenceLine
-                      y={currentVal * 0.8}
-                      stroke="red"
-                      strokeDasharray="3 3"
-                      label={{
-                        position: "insideBottomLeft",
-                        value: "LCL LIMIT",
-                        fill: "red",
-                        fontSize: 9,
-                      }}
-                    />
-
-                    {nowLabel && (
-                      <ReferenceLine
-                        x={nowLabel}
-                        stroke="#ef4444"
-                        strokeDasharray="3 3"
-                      />
-                    )}
+                  )}
+                  {isCrowd && (
                     <Area
                       type="step"
-                      dataKey="confRange"
-                      stroke="none"
-                      fill="#f59e0b"
-                      fillOpacity={0.15}
+                      dataKey="realValue"
+                      stroke="var(--color-realValue)"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorEnv)"
                       isAnimationActive={false}
                     />
-
+                  )}
+                  {isLight && (
+                    <Line
+                      type="monotone"
+                      dataKey="realValue"
+                      stroke="var(--color-realValue)"
+                      strokeWidth={3}
+                      dot={{ r: 3, fill: "var(--color-realValue)" }}
+                      isAnimationActive={false}
+                    />
+                  )}
+                  {isTilt && (
                     <Line
                       type="step"
                       dataKey="realValue"
@@ -1363,144 +1460,45 @@ export function SensorFocusPanel() {
                       dot={{ r: 4, fill: "var(--color-realValue)" }}
                       isAnimationActive={false}
                     />
-                    <Line
-                      type="step"
-                      dataKey="predictedValue"
-                      stroke="var(--color-predictedValue)"
-                      strokeWidth={2.5}
-                      strokeDasharray="5 5"
-                      dot={{ r: 4, fill: "var(--color-predictedValue)" }}
-                      isAnimationActive={false}
-                    />
-                  </ComposedChart>
-                </ChartContainer>
-              </div>
-            )}
-
-            {(isCrowd || isLight) && (
-              <div className="relative w-full">
-                <SyncBadge className="absolute top-0 right-4" />
-                <ChartContainer config={configMap} className="h-48 w-full pt-4">
-                  <ComposedChart
-                    data={chartData}
-                    margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      vertical={false}
-                      stroke="#d1d5db"
-                    />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 9, fill: "#64748b" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <ChartTooltip
-                      content={<ChartTooltipContent />}
-                      cursor={{ fill: "rgba(0,0,0,0.05)" }}
-                    />
-
-                    {nowLabel && (
-                      <ReferenceLine
-                        x={nowLabel}
-                        stroke="#ef4444"
-                        strokeDasharray="3 3"
-                        label={{
-                          position: "insideTopLeft",
-                          value: "FORECAST",
-                          fill: "#ef4444",
-                          fontSize: 9,
-                        }}
-                      />
-                    )}
-
-                    <Bar
-                      dataKey="realValue"
-                      fill="var(--color-realValue)"
-                      radius={[4, 4, 0, 0]}
-                      isAnimationActive={false}
-                    />
-                    <Bar
-                      dataKey="predictedValue"
-                      fill="var(--color-predictedValue)"
-                      radius={[4, 4, 0, 0]}
-                      isAnimationActive={false}
-                    />
-                  </ComposedChart>
-                </ChartContainer>
-              </div>
-            )}
-
-            {isWind && (
-              <>
-                <div className="relative w-full">
-                  <SyncBadge className="absolute top-0 right-4" />
-                  <ChartContainer
-                    config={configMap}
-                    className="h-40 w-full pt-4"
-                  >
-                    <ComposedChart
-                      data={chartData}
-                      margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        vertical={false}
-                        stroke="#d1d5db"
-                      />
-                      <XAxis
-                        dataKey="time"
-                        tick={{ fontSize: 9, fill: "#64748b" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 9, fill: "#64748b" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <ChartTooltip
-                        content={<ChartTooltipContent indicator="dashed" />}
-                      />
-
-                      {nowLabel && (
-                        <ReferenceLine
-                          x={nowLabel}
-                          stroke="#ef4444"
-                          strokeDasharray="3 3"
-                        />
-                      )}
-
-                      <Bar
+                  )}
+                  {isWind && (
+                    <>
+                      <Line
+                        type="monotone"
                         dataKey="realValue"
-                        fill="var(--color-realValue)"
-                        radius={[4, 4, 0, 0]}
-                        isAnimationActive={false}
-                      />
-                      <Bar
-                        dataKey="predictedValue"
-                        fill="var(--color-predictedValue)"
-                        radius={[4, 4, 0, 0]}
+                        stroke="var(--color-realValue)"
+                        strokeWidth={2.5}
+                        dot={{ r: 4, fill: "var(--color-realValue)" }}
                         isAnimationActive={false}
                       />
                       <Line
                         type="monotone"
                         dataKey="gust"
                         stroke="var(--color-gust)"
-                        strokeWidth={2.5}
-                        dot={{ r: 4, fill: "var(--color-gust)" }}
+                        strokeWidth={2}
+                        strokeDasharray="4 4"
+                        dot={false}
                         isAnimationActive={false}
                       />
-                    </ComposedChart>
-                  </ChartContainer>
-                </div>
+                    </>
+                  )}
 
+                  {/* Forecast Line */}
+                  <Line
+                    type={isTilt || isCrowd ? "step" : "monotone"}
+                    dataKey="predictedValue"
+                    stroke="var(--color-predictedValue)"
+                    strokeWidth={2.5}
+                    strokeDasharray="5 5"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ChartContainer>
+            </div>
+
+            {isWind && (
+              <>
                 <div className="h-px bg-gray-200 border-b border-dashed border-gray-300 w-full ml-4" />
                 <div className="flex justify-between items-center ml-8 mt-2 pr-4">
                   <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
@@ -1644,20 +1642,29 @@ export function SensorFocusPanel() {
         </HardwareReceiptCard>
       </BentoPanel>
 
-      {isAnalysisOpen && (
-        <BentoPanel
-          direction="right"
-          isOpen={true}
-          className="absolute top-20 right-[490px] w-[500px] z-20 flex flex-col gap-2 h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar pb-4 pr-2 pointer-events-auto drop-shadow-2xl"
+      {/* NEW CENTER PANEL (ANALYSIS) WITH INTEGRATED TOGGLE (DOCKED TO RIGHT) */}
+      <div className="absolute top-20 right-[472px] z-40 flex flex-col items-end pointer-events-none">
+        {/* 1. SQUARE TOGGLE BUTTON */}
+        <button
+          onClick={() => setIsAnalysisOpen(!isAnalysisOpen)}
+          className="p-2 rounded-xl shadow-md border flex items-center justify-center transition-all duration-300 pointer-events-auto bg-white/95 backdrop-blur-md text-[#1e3a8a] border-gray-200/80 hover:bg-blue-50 z-50 relative"
         >
-          <div className="relative w-full">
-            <button
-              onClick={() => setIsAnalysisOpen(false)}
-              className="absolute top-5 right-5 z-50 p-1.5 rounded-full bg-gray-50 hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors border border-gray-100 shadow-sm"
-            >
-              <X size={14} />
-            </button>
+          {isAnalysisOpen ? <X size={20} /> : <ChartIcon size={20} />}
+        </button>
 
+        {/* 2. EXPANDING PANEL */}
+        <div
+          className={`
+            mt-2 w-[500px] flex flex-col h-[calc(100vh-140px)] pointer-events-auto relative
+            transition-all duration-500 ease-out origin-top-right pt-2
+            ${
+              isAnalysisOpen
+                ? "opacity-100 scale-100 translate-y-0"
+                : "opacity-0 scale-y-0 scale-x-90 -translate-y-8 pointer-events-none"
+            }
+          `}
+        >
+          <div className="flex-1 w-full overflow-y-auto custom-scrollbar drop-shadow-2xl">
             <HardwareReceiptCard
               title="Diagnostic Correlations"
               vendorId={vendorId}
@@ -1669,106 +1676,43 @@ export function SensorFocusPanel() {
                 className="flex flex-col gap-8 w-full -ml-3 mt-2"
                 data-cursor="crosshair"
               >
-                {isTemp && (
+                {/* ========================================================
+                    INDOOR CORRELATIONS
+                    All indoor sensors triangulate with camera_ai_crowd
+                ======================================================== */}
+                {(isCO2 || isCrowd) && (
                   <div className="flex flex-col gap-1">
                     <div className="flex justify-between items-center ml-8 mb-2 pr-4">
                       <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                        HVAC Efficiency: Terminal vs Tarmac
-                      </span>
-                      <SyncBadge />
-                    </div>
-                    <ChartContainer config={configMap} className="h-64 w-full">
-                      <LineChart
-                        data={chartData}
-                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
-                      >
-                        <CartesianGrid
-                          strokeDasharray="3 3"
-                          vertical={false}
-                          stroke="#d1d5db"
-                        />
-                        <XAxis
-                          dataKey="time"
-                          tick={{ fontSize: 9, fill: "#64748b" }}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <YAxis
-                          tick={{ fontSize: 9, fill: "#64748b" }}
-                          tickLine={false}
-                          axisLine={false}
-                        />
-                        <ChartTooltip
-                          content={<ChartTooltipContent indicator="dashed" />}
-                        />
-
-                        {nowLabel && (
-                          <ReferenceLine
-                            x={nowLabel}
-                            stroke="#ef4444"
-                            strokeDasharray="3 3"
-                            label={{
-                              position: "insideTopLeft",
-                              value: "FORECAST",
-                              fill: "#ef4444",
-                              fontSize: 9,
-                            }}
-                          />
-                        )}
-
-                        <Line
-                          type="monotone"
-                          dataKey="indoorTemp"
-                          stroke="var(--color-indoorTemp)"
-                          strokeWidth={3}
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="tarmacTemp"
-                          stroke="var(--color-tarmacTemp)"
-                          strokeWidth={3}
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-
-                        <Line
-                          type="monotone"
-                          dataKey="predictedIndoorTemp"
-                          stroke="var(--color-predictedIndoorTemp)"
-                          strokeWidth={3}
-                          strokeDasharray="5 5"
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="predictedTarmacTemp"
-                          stroke="var(--color-predictedTarmacTemp)"
-                          strokeWidth={3}
-                          strokeDasharray="5 5"
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-                      </LineChart>
-                    </ChartContainer>
-                  </div>
-                )}
-
-                {(isAir || isCrowd) && (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between items-center ml-8 mb-2 pr-4">
-                      <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                        Human Impact: Crowd Flow vs Exhalation
+                        Air Quality Matrix: CO2 vs Temp vs Crowd Flow
                       </span>
                       <SyncBadge />
                     </div>
                     <ChartContainer config={configMap} className="h-64 w-full">
                       <ComposedChart
                         data={chartData}
-                        margin={{ left: -10, right: -10, top: 10, bottom: 0 }}
+                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
                       >
+                        <defs>
+                          <linearGradient
+                            id="co2Grad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-co2Level)"
+                              stopOpacity={0.6}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-co2Level)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
                         <CartesianGrid
                           strokeDasharray="3 3"
                           vertical={false}
@@ -1780,8 +1724,9 @@ export function SensorFocusPanel() {
                           tickLine={false}
                           axisLine={false}
                         />
+
                         <YAxis
-                          yAxisId="left"
+                          yAxisId="crowd"
                           orientation="left"
                           tick={{
                             fontSize: 9,
@@ -1791,18 +1736,23 @@ export function SensorFocusPanel() {
                           axisLine={false}
                         />
                         <YAxis
-                          yAxisId="right"
+                          yAxisId="co2"
                           orientation="right"
                           tick={{ fontSize: 9, fill: "var(--color-co2Level)" }}
                           tickLine={false}
                           axisLine={false}
+                        />
+                        <YAxis
+                          yAxisId="temp"
+                          orientation="right"
+                          hide={true}
                           domain={["auto", "auto"]}
                         />
 
                         <ChartTooltip content={<ChartTooltipContent />} />
                         {nowLabel && (
                           <ReferenceLine
-                            yAxisId="left"
+                            yAxisId="crowd"
                             x={nowLabel}
                             stroke="#ef4444"
                             strokeDasharray="3 3"
@@ -1814,40 +1764,75 @@ export function SensorFocusPanel() {
                             }}
                           />
                         )}
-
                         <Bar
-                          yAxisId="left"
+                          yAxisId="crowd"
                           dataKey="crowdDensity"
                           fill="var(--color-crowdDensity)"
-                          opacity={0.3}
+                          opacity={0.15}
                           radius={[4, 4, 0, 0]}
                           isAnimationActive={false}
                         />
                         <Bar
-                          yAxisId="left"
+                          yAxisId="crowd"
                           dataKey="predictedCrowdDensity"
                           fill="var(--color-predictedCrowdDensity)"
-                          opacity={0.3}
+                          opacity={0.15}
                           radius={[4, 4, 0, 0]}
                           isAnimationActive={false}
                         />
 
                         <Area
-                          yAxisId="right"
+                          yAxisId="co2"
                           type="monotone"
                           dataKey="co2Level"
-                          stroke="var(--color-co2Level)"
-                          strokeWidth={3}
-                          fill="var(--color-co2Level)"
-                          fillOpacity={0.15}
+                          stroke="none"
+                          fill="url(#co2Grad)"
+                          fillOpacity={1}
                           isAnimationActive={false}
                         />
                         <Line
-                          yAxisId="right"
+                          yAxisId="co2"
+                          type="monotone"
+                          dataKey="co2Level"
+                          stroke="var(--color-co2Level)"
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="co2"
                           type="monotone"
                           dataKey="predictedCo2Level"
                           stroke="var(--color-predictedCo2Level)"
-                          strokeWidth={2.5}
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="indoorTemp"
+                          stroke="var(--color-indoorTemp)"
+                          strokeWidth={4}
+                          strokeLinecap="round"
+                          style={{
+                            filter: "drop-shadow(0px 2px 4px rgba(0,0,0,0.15))",
+                          }}
+                          dot={{
+                            r: 2,
+                            fill: "var(--color-indoorTemp)",
+                            strokeWidth: 2,
+                          }}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="predictedIndoorTemp"
+                          stroke="var(--color-predictedIndoorTemp)"
+                          strokeWidth={3}
                           strokeDasharray="5 5"
                           dot={false}
                           isAnimationActive={false}
@@ -1857,19 +1842,39 @@ export function SensorFocusPanel() {
                   </div>
                 )}
 
-                {(isTilt || isWind) && (
+                {(isIndoorTemp || isHumidity) && !isCO2 && !isCrowd && (
                   <div className="flex flex-col gap-1">
                     <div className="flex justify-between items-center ml-8 mb-2 pr-4">
                       <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                        Structural Impact: Wind Velocity vs Deflection
+                        Thermal Comfort Matrix: Temp vs Humidity vs Crowd Flow
                       </span>
                       <SyncBadge />
                     </div>
                     <ChartContainer config={configMap} className="h-64 w-full">
                       <ComposedChart
                         data={chartData}
-                        margin={{ left: -10, right: -10, top: 10, bottom: 0 }}
+                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
                       >
+                        <defs>
+                          <linearGradient
+                            id="humGrad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-humidity)"
+                              stopOpacity={0.6}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-humidity)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
                         <CartesianGrid
                           strokeDasharray="3 3"
                           vertical={false}
@@ -1881,8 +1886,482 @@ export function SensorFocusPanel() {
                           tickLine={false}
                           axisLine={false}
                         />
+
                         <YAxis
-                          yAxisId="left"
+                          yAxisId="crowd"
+                          orientation="left"
+                          tick={{
+                            fontSize: 9,
+                            fill: "var(--color-crowdDensity)",
+                          }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis
+                          yAxisId="humidity"
+                          orientation="right"
+                          tick={{ fontSize: 9, fill: "var(--color-humidity)" }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis
+                          yAxisId="temp"
+                          orientation="right"
+                          hide={true}
+                          domain={["auto", "auto"]}
+                        />
+
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        {nowLabel && (
+                          <ReferenceLine
+                            yAxisId="crowd"
+                            x={nowLabel}
+                            stroke="#ef4444"
+                            strokeDasharray="3 3"
+                            label={{
+                              position: "insideTopLeft",
+                              value: "FORECAST",
+                              fill: "#ef4444",
+                              fontSize: 9,
+                            }}
+                          />
+                        )}
+                        <Bar
+                          yAxisId="crowd"
+                          dataKey="crowdDensity"
+                          fill="var(--color-crowdDensity)"
+                          opacity={0.15}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={false}
+                        />
+                        <Bar
+                          yAxisId="crowd"
+                          dataKey="predictedCrowdDensity"
+                          fill="var(--color-predictedCrowdDensity)"
+                          opacity={0.15}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={false}
+                        />
+
+                        <Area
+                          yAxisId="humidity"
+                          type="monotone"
+                          dataKey="humidity"
+                          stroke="none"
+                          fill="url(#humGrad)"
+                          fillOpacity={1}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="humidity"
+                          type="monotone"
+                          dataKey="humidity"
+                          stroke="var(--color-humidity)"
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="humidity"
+                          type="monotone"
+                          dataKey="predictedHumidity"
+                          stroke="var(--color-predictedHumidity)"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="indoorTemp"
+                          stroke="var(--color-indoorTemp)"
+                          strokeWidth={4}
+                          strokeLinecap="round"
+                          style={{
+                            filter: "drop-shadow(0px 2px 4px rgba(0,0,0,0.15))",
+                          }}
+                          dot={{
+                            r: 2,
+                            fill: "var(--color-indoorTemp)",
+                            strokeWidth: 2,
+                          }}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="predictedIndoorTemp"
+                          stroke="var(--color-predictedIndoorTemp)"
+                          strokeWidth={3}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </ComposedChart>
+                    </ChartContainer>
+                  </div>
+                )}
+
+                {isIndoorWind && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center ml-8 mb-2 pr-4">
+                      <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
+                        HVAC Draft Analysis: Indoor Wind vs Temp vs Crowd
+                      </span>
+                      <SyncBadge />
+                    </div>
+                    <ChartContainer config={configMap} className="h-64 w-full">
+                      <ComposedChart
+                        data={chartData}
+                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient
+                            id="windInGrad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-windIndoor)"
+                              stopOpacity={0.6}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-windIndoor)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          vertical={false}
+                          stroke="#d1d5db"
+                        />
+                        <XAxis
+                          dataKey="time"
+                          tick={{ fontSize: 9, fill: "#64748b" }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+
+                        <YAxis
+                          yAxisId="crowd"
+                          orientation="left"
+                          tick={{
+                            fontSize: 9,
+                            fill: "var(--color-crowdDensity)",
+                          }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis
+                          yAxisId="wind"
+                          orientation="right"
+                          tick={{
+                            fontSize: 9,
+                            fill: "var(--color-windIndoor)",
+                          }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis
+                          yAxisId="temp"
+                          orientation="right"
+                          hide={true}
+                          domain={["auto", "auto"]}
+                        />
+
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        {nowLabel && (
+                          <ReferenceLine
+                            yAxisId="crowd"
+                            x={nowLabel}
+                            stroke="#ef4444"
+                            strokeDasharray="3 3"
+                            label={{
+                              position: "insideTopLeft",
+                              value: "FORECAST",
+                              fill: "#ef4444",
+                              fontSize: 9,
+                            }}
+                          />
+                        )}
+                        <Bar
+                          yAxisId="crowd"
+                          dataKey="crowdDensity"
+                          fill="var(--color-crowdDensity)"
+                          opacity={0.15}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={false}
+                        />
+                        <Bar
+                          yAxisId="crowd"
+                          dataKey="predictedCrowdDensity"
+                          fill="var(--color-predictedCrowdDensity)"
+                          opacity={0.15}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={false}
+                        />
+
+                        <Area
+                          yAxisId="wind"
+                          type="monotone"
+                          dataKey="windIndoor"
+                          stroke="none"
+                          fill="url(#windInGrad)"
+                          fillOpacity={1}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="wind"
+                          type="monotone"
+                          dataKey="windIndoor"
+                          stroke="var(--color-windIndoor)"
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="wind"
+                          type="monotone"
+                          dataKey="predictedWindIndoor"
+                          stroke="var(--color-predictedWindIndoor)"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="indoorTemp"
+                          stroke="var(--color-indoorTemp)"
+                          strokeWidth={4}
+                          strokeLinecap="round"
+                          style={{
+                            filter: "drop-shadow(0px 2px 4px rgba(0,0,0,0.15))",
+                          }}
+                          dot={{
+                            r: 2,
+                            fill: "var(--color-indoorTemp)",
+                            strokeWidth: 2,
+                          }}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="predictedIndoorTemp"
+                          stroke="var(--color-predictedIndoorTemp)"
+                          strokeWidth={3}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </ComposedChart>
+                    </ChartContainer>
+                  </div>
+                )}
+
+                {/* ========================================================
+                    OUTDOOR CORRELATIONS
+                    Wind_Outdoor receives BOTH Heat Dissipation and Shear
+                ======================================================== */}
+                {(isTarmacTemp || isOutdoorWind) && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center ml-8 mb-2 pr-4">
+                      <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
+                        Surface Thermal Dissipation: Tarmac Temp vs Outdoor Wind
+                      </span>
+                      <SyncBadge />
+                    </div>
+                    <ChartContainer config={configMap} className="h-64 w-full">
+                      <ComposedChart
+                        data={chartData}
+                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient
+                            id="tarmacGrad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-tarmacTemp)"
+                              stopOpacity={0.7}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-tarmacTemp)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          vertical={false}
+                          stroke="#d1d5db"
+                        />
+                        <XAxis
+                          dataKey="time"
+                          tick={{ fontSize: 9, fill: "#64748b" }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+
+                        <YAxis
+                          yAxisId="temp"
+                          orientation="left"
+                          tick={{
+                            fontSize: 9,
+                            fill: "var(--color-tarmacTemp)",
+                          }}
+                          tickLine={false}
+                          axisLine={false}
+                          domain={["auto", "auto"]}
+                        />
+                        <YAxis
+                          yAxisId="wind"
+                          orientation="right"
+                          tick={{
+                            fontSize: 9,
+                            fill: "var(--color-windOutdoor)",
+                          }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        {nowLabel && (
+                          <ReferenceLine
+                            yAxisId="temp"
+                            x={nowLabel}
+                            stroke="#ef4444"
+                            strokeDasharray="3 3"
+                            label={{
+                              position: "insideTopLeft",
+                              value: "FORECAST",
+                              fill: "#ef4444",
+                              fontSize: 9,
+                            }}
+                          />
+                        )}
+                        <Area
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="tarmacTemp"
+                          stroke="none"
+                          fill="url(#tarmacGrad)"
+                          fillOpacity={1}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="tarmacTemp"
+                          stroke="var(--color-tarmacTemp)"
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="temp"
+                          type="monotone"
+                          dataKey="predictedTarmacTemp"
+                          stroke="var(--color-predictedTarmacTemp)"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+
+                        <Line
+                          yAxisId="wind"
+                          type="step"
+                          dataKey="windOutdoor"
+                          stroke="var(--color-windOutdoor)"
+                          strokeWidth={4}
+                          style={{
+                            filter: "drop-shadow(0px 2px 4px rgba(0,0,0,0.15))",
+                          }}
+                          dot={{
+                            r: 2,
+                            fill: "var(--color-windOutdoor)",
+                            strokeWidth: 2,
+                          }}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          yAxisId="wind"
+                          type="step"
+                          dataKey="predictedWindOutdoor"
+                          stroke="var(--color-predictedWindOutdoor)"
+                          strokeWidth={3}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </ComposedChart>
+                    </ChartContainer>
+                  </div>
+                )}
+
+                {(isTilt || isOutdoorWind) && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center ml-8 mb-2 pr-4">
+                      <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
+                        Structural Shear Load: Deflection vs Outdoor Wind
+                      </span>
+                      <SyncBadge />
+                    </div>
+                    <ChartContainer config={configMap} className="h-64 w-full">
+                      <ComposedChart
+                        data={chartData}
+                        margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient
+                            id="windOutGrad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-windOutdoor)"
+                              stopOpacity={0.4}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-windOutdoor)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          vertical={false}
+                          stroke="#d1d5db"
+                        />
+                        <XAxis
+                          dataKey="time"
+                          tick={{ fontSize: 9, fill: "#64748b" }}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+
+                        <YAxis
+                          yAxisId="wind"
                           orientation="left"
                           tick={{
                             fontSize: 9,
@@ -1892,7 +2371,7 @@ export function SensorFocusPanel() {
                           axisLine={false}
                         />
                         <YAxis
-                          yAxisId="right"
+                          yAxisId="tilt"
                           orientation="right"
                           tick={{
                             fontSize: 9,
@@ -1906,7 +2385,7 @@ export function SensorFocusPanel() {
                         <ChartTooltip content={<ChartTooltipContent />} />
                         {nowLabel && (
                           <ReferenceLine
-                            yAxisId="left"
+                            yAxisId="wind"
                             x={nowLabel}
                             stroke="#ef4444"
                             strokeDasharray="3 3"
@@ -1918,54 +2397,50 @@ export function SensorFocusPanel() {
                             }}
                           />
                         )}
-
+                        <Area
+                          yAxisId="wind"
+                          type="monotone"
+                          dataKey="windOutdoor"
+                          stroke="none"
+                          fill="url(#windOutGrad)"
+                          fillOpacity={1}
+                          isAnimationActive={false}
+                        />
                         <Line
-                          yAxisId="left"
+                          yAxisId="wind"
                           type="monotone"
                           dataKey="windOutdoor"
                           stroke="var(--color-windOutdoor)"
-                          strokeWidth={3}
+                          strokeWidth={2}
                           dot={false}
                           isAnimationActive={false}
                         />
                         <Line
-                          yAxisId="left"
+                          yAxisId="wind"
                           type="monotone"
                           dataKey="predictedWindOutdoor"
                           stroke="var(--color-predictedWindOutdoor)"
-                          strokeWidth={3}
+                          strokeWidth={2}
                           strokeDasharray="5 5"
                           dot={false}
                           isAnimationActive={false}
                         />
 
-                        <ReferenceLine
-                          yAxisId="right"
-                          y={0.04}
-                          stroke="red"
-                          strokeDasharray="3 3"
-                          label={{
-                            position: "insideBottomLeft",
-                            value: "SHEAR LIMIT",
-                            fill: "red",
-                            fontSize: 9,
-                          }}
-                        />
                         <Line
-                          yAxisId="right"
+                          yAxisId="tilt"
                           type="step"
                           dataKey="structTilt"
                           stroke="var(--color-structTilt)"
-                          strokeWidth={2.5}
+                          strokeWidth={3}
                           dot={{ r: 3, fill: "var(--color-structTilt)" }}
                           isAnimationActive={false}
                         />
                         <Line
-                          yAxisId="right"
+                          yAxisId="tilt"
                           type="step"
                           dataKey="predictedStructTilt"
                           stroke="var(--color-predictedStructTilt)"
-                          strokeWidth={2.5}
+                          strokeWidth={3}
                           strokeDasharray="5 5"
                           dot={{
                             r: 3,
@@ -1978,19 +2453,42 @@ export function SensorFocusPanel() {
                   </div>
                 )}
 
-                {isWind && (
-                  <div className="flex flex-col gap-1 pt-4 border-t border-dashed border-gray-200">
+                {/* ========================================================
+                    INDOOR VS OUTDOOR COMPARISONS
+                ======================================================== */}
+                {isTemp && (
+                  <div className="flex flex-col gap-1 border-t border-dashed border-gray-200 pt-4">
                     <div className="flex justify-between items-center ml-8 mb-2 pr-4">
                       <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                        Draft Analysis: Indoor vs Outdoor Wind Volume
+                        Thermal Efficiency Delta: Indoor Temp vs Tarmac Temp
                       </span>
                       <SyncBadge />
                     </div>
-                    <ChartContainer config={configMap} className="h-56 w-full">
+                    <ChartContainer config={configMap} className="h-64 w-full">
                       <ComposedChart
                         data={chartData}
                         margin={{ left: -10, right: 10, top: 10, bottom: 0 }}
                       >
+                        <defs>
+                          <linearGradient
+                            id="tarmacBaseGrad"
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="5%"
+                              stopColor="var(--color-tarmacTemp)"
+                              stopOpacity={0.4}
+                            />
+                            <stop
+                              offset="95%"
+                              stopColor="var(--color-tarmacTemp)"
+                              stopOpacity={0.0}
+                            />
+                          </linearGradient>
+                        </defs>
                         <CartesianGrid
                           strokeDasharray="3 3"
                           vertical={false}
@@ -2006,11 +2504,10 @@ export function SensorFocusPanel() {
                           tick={{ fontSize: 9, fill: "#64748b" }}
                           tickLine={false}
                           axisLine={false}
-                        />
-                        <ChartTooltip
-                          content={<ChartTooltipContent indicator="dashed" />}
+                          domain={["auto", "auto"]}
                         />
 
+                        <ChartTooltip content={<ChartTooltipContent />} />
                         {nowLabel && (
                           <ReferenceLine
                             x={nowLabel}
@@ -2024,40 +2521,52 @@ export function SensorFocusPanel() {
                             }}
                           />
                         )}
-
                         <Area
                           type="monotone"
-                          dataKey="windOutdoor"
-                          stroke="var(--color-windOutdoor)"
-                          strokeWidth={2}
-                          fill="var(--color-windOutdoor)"
-                          fillOpacity={0.2}
+                          dataKey="tarmacTemp"
+                          stroke="none"
+                          fill="url(#tarmacBaseGrad)"
+                          fillOpacity={1}
                           isAnimationActive={false}
                         />
-                        <Area
-                          type="monotone"
-                          dataKey="windIndoor"
-                          stroke="var(--color-windIndoor)"
-                          strokeWidth={2}
-                          fill="var(--color-windIndoor)"
-                          fillOpacity={0.6}
-                          isAnimationActive={false}
-                        />
-
                         <Line
                           type="monotone"
-                          dataKey="predictedWindOutdoor"
-                          stroke="var(--color-predictedWindOutdoor)"
-                          strokeWidth={2.5}
-                          strokeDasharray="5 5"
+                          dataKey="tarmacTemp"
+                          stroke="var(--color-tarmacTemp)"
+                          strokeWidth={2}
                           dot={false}
                           isAnimationActive={false}
                         />
                         <Line
                           type="monotone"
-                          dataKey="predictedWindIndoor"
-                          stroke="var(--color-predictedWindIndoor)"
-                          strokeWidth={2.5}
+                          dataKey="predictedTarmacTemp"
+                          stroke="var(--color-predictedTarmacTemp)"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+
+                        <Line
+                          type="monotone"
+                          dataKey="indoorTemp"
+                          stroke="var(--color-indoorTemp)"
+                          strokeWidth={4}
+                          style={{
+                            filter: "drop-shadow(0px 2px 4px rgba(0,0,0,0.15))",
+                          }}
+                          dot={{
+                            r: 2,
+                            fill: "var(--color-indoorTemp)",
+                            strokeWidth: 2,
+                          }}
+                          isAnimationActive={false}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="predictedIndoorTemp"
+                          stroke="var(--color-predictedIndoorTemp)"
+                          strokeWidth={3}
                           strokeDasharray="5 5"
                           dot={false}
                           isAnimationActive={false}
@@ -2067,11 +2576,72 @@ export function SensorFocusPanel() {
                   </div>
                 )}
 
+                {isWind && (
+                  <div className="flex flex-col gap-1 border-t border-dashed border-gray-200 pt-4">
+                    <div className="flex justify-between items-center ml-8 mb-2 pr-4">
+                      <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
+                        Wind Velocity Delta: Indoor Draft vs Outdoor Shear
+                      </span>
+                      <SyncBadge />
+                    </div>
+                    <ChartContainer
+                      config={configMap}
+                      className="h-64 w-full mt-2"
+                    >
+                      <RadarChart
+                        cx="50%"
+                        cy="50%"
+                        outerRadius="70%"
+                        data={dualWindRadarData}
+                      >
+                        <PolarGrid stroke="#cbd5e1" />
+                        <PolarAngleAxis
+                          dataKey="direction"
+                          tick={{
+                            fontSize: 10,
+                            fill: "#64748b",
+                            fontWeight: "bold",
+                          }}
+                        />
+                        <PolarRadiusAxis
+                          angle={90}
+                          domain={[0, "dataMax + 2"]}
+                          tick={false}
+                          axisLine={false}
+                        />
+
+                        <Radar
+                          name="Outdoor Matrix"
+                          dataKey="outdoor"
+                          stroke="var(--color-windOutdoor)"
+                          strokeWidth={2}
+                          fill="var(--color-windOutdoor)"
+                          fillOpacity={0.3}
+                          isAnimationActive={false}
+                        />
+                        <Radar
+                          name="Indoor Matrix"
+                          dataKey="indoor"
+                          stroke="var(--color-windIndoor)"
+                          strokeWidth={2}
+                          fill="var(--color-windIndoor)"
+                          fillOpacity={0.5}
+                          isAnimationActive={false}
+                        />
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                      </RadarChart>
+                    </ChartContainer>
+                  </div>
+                )}
+
+                {/* ========================================================
+                    FALLBACKS / SPATIAL MAPPING
+                ======================================================== */}
                 {isLight && (
                   <div className="flex flex-col gap-1">
                     <div className="flex justify-between items-center ml-8 mb-2 pr-4">
                       <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                        Solar Gain: Light Intensity vs Tarmac Temp
+                        Solar Gain: Light Intensity vs Ambient Temp
                       </span>
                       <SyncBadge />
                     </div>
@@ -2112,7 +2682,6 @@ export function SensorFocusPanel() {
                           axisLine={false}
                           domain={["auto", "auto"]}
                         />
-
                         <ChartTooltip content={<ChartTooltipContent />} />
                         {nowLabel && (
                           <ReferenceLine
@@ -2128,27 +2697,24 @@ export function SensorFocusPanel() {
                             }}
                           />
                         )}
-
                         <Area
                           yAxisId="left"
                           type="monotone"
                           dataKey="lightDensity"
                           stroke="var(--color-lightDensity)"
                           fill="var(--color-lightDensity)"
-                          fillOpacity={0.2}
+                          fillOpacity={0.3}
                           isAnimationActive={false}
                         />
-                        <Line
+                        <Area
                           yAxisId="left"
                           type="monotone"
                           dataKey="predictedLightDensity"
                           stroke="var(--color-predictedLightDensity)"
-                          strokeWidth={2.5}
-                          strokeDasharray="5 5"
-                          dot={false}
+                          fill="var(--color-predictedLightDensity)"
+                          fillOpacity={0.3}
                           isAnimationActive={false}
                         />
-
                         <Line
                           yAxisId="right"
                           type="monotone"
@@ -2182,8 +2748,8 @@ export function SensorFocusPanel() {
               </div>
             </HardwareReceiptCard>
           </div>
-        </BentoPanel>
-      )}
+        </div>
+      </div>
     </>
   );
 }
