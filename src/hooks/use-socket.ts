@@ -43,7 +43,8 @@ export function useSocket() {
 
     // 3. STRIP THE API PATH: Socket.io connects to root, not /api/v1
     const apiUrl =
-      process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
+      process.env.NEXT_PUBLIC_API_URL ||
+      "https://digital-twin-airport-api-1.onrender.com/api/v1";
     const socketUrl = apiUrl.replace("/api/v1", "");
 
     // 4. FORCE WEBSOCKETS (FAST PATH)

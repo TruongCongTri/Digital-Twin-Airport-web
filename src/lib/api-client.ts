@@ -12,7 +12,9 @@ import type {
 } from "@/types";
 
 export const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL:
+    process.env.NEXT_PUBLIC_API_URL ||
+    "https://digital-twin-airport-api-1.onrender.com/api/v1",
   withCredentials: true,
   timeout: 10000,
 });
