@@ -301,7 +301,7 @@ export const fetchSensorDetail = async (sensorId: string) => {
 };
 
 export const fetchSensorHistory = async (sensorId: string) => {
-  const res = await apiClient.get(`/sensors/${sensorId}/history`);
+  const res = await apiClient.get(`/sensors/${sensorId}/history?limit=100`);
   return res.data?.data || [];
 };
 

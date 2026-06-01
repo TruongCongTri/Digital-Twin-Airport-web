@@ -5,7 +5,7 @@ import { useAirportStore } from "@/src/store/airport-store";
 import { AirportDashboard } from "@/src/components/dashboard/AirportDashboard";
 import { MapTooltips } from "@/src/components/map/MapTooltips";
 import { PlaneFocusPanel } from "@/src/components/panels/PlaneFocusPanel";
-import { SensorFocusPanel } from "@/src/components/panels/SensorFocusPanel";
+import { SensorFocusPanel } from "@/src/components/panels/SensorFocusPanel-v2";
 import { DashboardToggle } from "@/src/components/DashboardToggle";
 import { TopBar } from "@/src/components/TopBar";
 
