@@ -22,6 +22,7 @@ import {
   startScenario,
   rebootSimulation,
   fetchSimulationStatus,
+  forceFlightPipeline, // ✅ Added API import
 } from "../lib/api-client";
 import { Scenario } from "@/types";
 
@@ -150,6 +151,25 @@ export function DashboardToggle() {
     },
     onSuccess: () => toast.success("Engine Rebooted Successfully"),
     onError: () => toast.error("Reboot failed"),
+  });
+
+  // ✅ NEW: Pipeline Force Mutation
+  const pipelineMutation = useMutation({
+    mutationFn: (airportCode: string) => forceFlightPipeline(airportCode),
+    onMutate: () => {
+      setIsMenuOpen(false);
+      toast.loading("Resetting and triggering pipeline...");
+    },
+    onSuccess: (data) => {
+      toast.dismiss();
+      toast.success("Pipeline Triggered!", {
+        description: data.message,
+      });
+    },
+    onError: () => {
+      toast.dismiss();
+      toast.error("Failed to trigger pipeline");
+    },
   });
 
   // Click Outside Handler
@@ -344,6 +364,20 @@ export function DashboardToggle() {
                       })}
 
                       <div className="h-[1px] bg-gray-200/60 w-full my-1" />
+
+                      {/* ✅ NEW: Force Flight Pipeline Button */}
+                      <button
+                        onClick={() => pipelineMutation.mutate(activeAirport)}
+                        disabled={pipelineMutation.isPending}
+                        className="text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex justify-between items-center bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/50 mb-1"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Plane size={12} />{" "}
+                          {pipelineMutation.isPending
+                            ? "Forcing Pipeline..."
+                            : "Force Flight Pipeline"}
+                        </span>
+                      </button>
 
                       <button
                         onClick={() => rebootMutation.mutate()}

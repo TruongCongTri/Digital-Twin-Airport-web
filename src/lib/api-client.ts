@@ -425,3 +425,10 @@ export const fetchSimulationStatus = async () => {
   const res = await apiClient.get("/simulation/status");
   return res.data?.data || null;
 };
+
+export const forceFlightPipeline = async (airportCode: string) => {
+  const res = await apiClient.post("/simulation/pipeline/force", {
+    airportCode,
+  });
+  return res.data;
+};
