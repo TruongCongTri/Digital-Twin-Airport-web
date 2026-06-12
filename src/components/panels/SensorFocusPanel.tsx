@@ -660,7 +660,7 @@ export function SensorFocusPanel() {
   const [throttledHeavy, setThrottledHeavy] = useState(() => {
     const state = useAirportStore.getState();
     return {
-      history: state.historicalData,
+      // history: state.historicalData,
       forecasts: state.aiForecasts,
       sensors: state.sensors,
       lastUpdated: Date.now(),
@@ -672,7 +672,7 @@ export function SensorFocusPanel() {
     const syncData = () => {
       const state = useAirportStore.getState();
       setThrottledHeavy({
-        history: state.historicalData,
+        // history: state.historicalData,
         forecasts: state.aiForecasts,
         sensors: state.sensors,
         lastUpdated: Date.now(),
@@ -684,7 +684,8 @@ export function SensorFocusPanel() {
     return () => clearInterval(interval);
   }, [isDashboardOpen, sensor?.id]);
 
-  const history = (sensor && throttledHeavy.history[sensor.id]) || EMPTY_ARRAY;
+  // const history = (sensor && throttledHeavy.history[sensor.id]) || EMPTY_ARRAY;
+  const history = sensor?.history || EMPTY_ARRAY;
   const storeForecast = sensor
     ? throttledHeavy.forecasts[sensor.id]
     : undefined;

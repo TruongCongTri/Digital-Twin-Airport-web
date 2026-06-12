@@ -1,4 +1,4 @@
-export type EntityType = "plane" | "sensor" | null;
+export type EntityType = "plane" | "sensor" | "vehicle" | null;
 export type AppState = "normal" | "dashboard" | "entity-focus";
 export type PlaneStatus =
   | "SCHEDULED"
@@ -48,7 +48,19 @@ export type Scenario =
   | "HEAVY_LOAD"
   | "EARTHQUAKE";
 export type SimulationMode = "NONE" | "GENERAL" | Scenario;
+export type VehicleType =
+  | "PERSONAL_CAR"
+  | "TAXI"
+  | "RIDE_HAIL"
+  | "VIP_TRANSFER";
 
+export type VehicleStatus =
+  | "APPROACHING_DROP_OFF"
+  | "DROPPING_OFF"
+  | "PARKED"
+  | "APPROACHING_PICK_UP"
+  | "PICKING_UP"
+  | "EXITING";
 export interface MapPoint {
   longitude: number;
   latitude: number;
@@ -212,4 +224,22 @@ export interface AIPredictionPayload {
   sensorId: string;
   type: string; // or SensorType if you imported the enum
   predictions: AIPrediction[];
+}
+
+export interface Vehicle {
+  id: string;
+  callsign: string; // Kept for UI uniformity (mapped from licensePlate)
+  licensePlate: string;
+  type: VehicleType;
+  status: VehicleStatus;
+  speed: number;
+  heading: number;
+  batteryLevel?: number | null;
+  brand?: string | null;
+  carModel?: string | null;
+  companyName?: string | null;
+  imageUrl?: string | null;
+  logoUrl?: string | null;
+  position: { longitude: number; latitude: number; z?: number };
+  path?: { longitude: number; latitude: number }[];
 }

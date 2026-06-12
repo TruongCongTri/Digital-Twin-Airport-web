@@ -5,6 +5,7 @@ import "./globals.css";
 import { CustomCursor } from "@/src/components/CustomCursor";
 import { Toaster } from "@/components/ui/sonner";
 import { AppBootstrapper } from "@/src/components/AppBootstrapper";
+import { QueryProvider } from "@/src/components/providers/QueryProvider";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,11 @@ export default function RootLayout({
       <body className="h-full overflow-hidden">
         <CustomCursor />
         <Toaster />
-        <AppBootstrapper>{children}</AppBootstrapper>
+        {/* 1. QueryProvider must wrap everything that uses React Query */}
+        <QueryProvider>
+          {/* 2. AppBootstrapper can now safely use useQuery! */}
+          <AppBootstrapper>{children}</AppBootstrapper>
+        </QueryProvider>
       </body>
     </html>
   );

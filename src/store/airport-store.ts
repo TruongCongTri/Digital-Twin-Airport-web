@@ -11,74 +11,62 @@ import type {
   SensorStatus,
   SimulationMode,
   AIPredictionPayload,
-  PlaneDirection,
-  SensorLog,
+  Vehicle,
+  VehicleStatus,
+  VehicleType,
 } from "@/types";
-import {
-  fetchFlights,
-  fetchSensors,
-  fetchSimulationStatus,
-  fetchStaticFlights,
-  fetchStaticSensors,
-  fetchSensorHistory, // ✅ Imported new function
-  FlightQueryParams,
-  SensorQueryParams,
-  startSimulation,
-} from "../lib/api-client";
 
 interface AirportStore {
+  // UI & View State
   appState: AppState;
+  activeAirport: string;
   isDashboardOpen: boolean;
   selectedEntityId: string | null;
-  selectedEntityType: EntityType;
+  selectedEntityType: EntityType | "vehicle";
   isCameraTracking: boolean;
   analysisMode: boolean;
   simulationMode: SimulationMode;
-
-  planes: Plane[];
-  sensors: Sensor[];
-  metrics: AirportMetrics;
-  tooltips: TooltipData[];
-
+  isImmersiveActive: boolean;
   mapFilters: Record<string, boolean>;
-
-  historicalData: Record<string, { timestamp: string; value: number }[]>;
+  tooltips: TooltipData[];
   aiForecasts: Record<string, AIPredictionPayload>;
 
-  isImmersiveActive: boolean;
+  // High-Speed Telemetry State
+  planes: Plane[];
+  sensors: Sensor[];
+  vehicles: Vehicle[];
+  metrics: AirportMetrics;
 
-  // --- Actions ---
+  // Actions - UI
+  setActiveAirport: (airportId: string) => void;
   toggleDashboard: () => void;
-  selectEntity: (id: string, type: EntityType) => void;
+  selectEntity: (id: string, type: EntityType | "vehicle") => void;
   clearSelection: () => void;
   setCameraTracking: (tracking: boolean) => void;
   setAnalysisMode: (mode: boolean) => void;
   updateTooltip: (tooltip: TooltipData) => void;
-
-  hydrateStaticData: () => Promise<void>;
-  syncHeavyData: () => Promise<void>;
-  syncSensorHistory: (sensorId: string) => Promise<void>; // ✅ Added action
-
-  // Data Loading Actions
-  setInitialData: (sensors: Sensor[], planes: Plane[]) => void;
-  loadPlanes: (params?: FlightQueryParams) => Promise<void>;
-  loadSensors: (params?: SensorQueryParams) => Promise<void>;
-
-  updatePlaneTelemetry: (telemetry: Partial<Plane>) => void;
-  updatePlaneTelemetryBatch: (telemetryBatch: Partial<Plane>[]) => void;
-  updateSensorTelemetry: (id: string, value: number, status?: string) => void;
   updateAllTooltips: (tooltips: TooltipData[]) => void;
-
   setSimulationMode: (mode: SimulationMode) => void;
+  setImmersiveActive: (active: boolean) => void;
+  toggleMapFilter: (filterKey: string) => void;
 
+  // Actions - Data Ingestion
+  setInitialData: (
+    sensors: Sensor[],
+    planes: Plane[],
+    vehicles: Vehicle[],
+  ) => void; // ✅ Unified
+
+  // High Speed Socket Handlers
+  updatePlaneTelemetryBatch: (telemetryBatch: Partial<Plane>[]) => void;
+  updateVehicleTelemetryBatch: (telemetryBatch: Partial<Vehicle>[]) => void;
+  updateSensorTelemetry: (id: string, value: number, status?: string) => void;
+  updateAIForecast: (payload: AIPredictionPayload) => void;
+
+  // Getters
   getSelectedPlane: () => Plane | null;
   getSelectedSensor: () => Sensor | null;
-
-  updateAIForecast: (payload: AIPredictionPayload) => void;
-  toggleMapFilter: (filterKey: string) => void;
-  syncSimulationStatus: () => Promise<void>;
-
-  setImmersiveActive: (active: boolean) => void;
+  getSelectedVehicle: () => Vehicle | null;
 }
 
 const getActiveFlightCount = (planes: Plane[]) => {
@@ -87,20 +75,23 @@ const getActiveFlightCount = (planes: Plane[]) => {
   ).length;
 };
 
-const getUnitForType = (type: string): string => {
-  const t = type?.toUpperCase();
-  if (t === "TEMPERATURE" || t === "TARMAC_TEMP") return "°C";
-  if (t === "HUMIDITY") return "%";
-  if (t === "CO2") return "ppm";
-  if (t === "WIND_INDOOR" || t === "WIND_OUTDOOR") return "m/s";
-  if (t === "LIGHT_DENSITY") return "lux";
-  if (t === "TILT_STRUCTURAL") return "deg";
-  if (t === "CAMERA_AI_CROWD") return "pax";
-  return "";
+// Default baseline metrics
+const DEFAULT_METRICS: AirportMetrics = {
+  activeFlights: 0,
+  departuresToday: 186,
+  arrivalsToday: 193,
+  avgDelay: 12,
+  runwayStatus: "open",
+  visibility: 9.8,
+  windSpeed: 14,
+  windDirection: 240,
+  temperature: 22,
+  alertCount: 0,
 };
 
 export const useAirportStore = create<AirportStore>((set, get) => ({
   appState: "normal",
+  activeAirport: "VVLT",
   isDashboardOpen: false,
   selectedEntityId: null,
   selectedEntityType: null,
@@ -108,26 +99,48 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   analysisMode: false,
   planes: [],
   sensors: [],
+  vehicles: [],
   tooltips: [],
-  historicalData: {},
   aiForecasts: {},
-  metrics: {
-    activeFlights: 0,
-    departuresToday: 186,
-    arrivalsToday: 193,
-    avgDelay: 12,
-    runwayStatus: "open",
-    visibility: 9.8,
-    windSpeed: 14,
-    windDirection: 240,
-    temperature: 22,
-    alertCount: 0,
-  },
+  metrics: DEFAULT_METRICS,
   simulationMode: "NONE",
   isImmersiveActive: false,
+  mapFilters: {
+    planes: true,
+    vehicles: true,
+    TEMPERATURE: true,
+    TARMAC_TEMP: true,
+    HUMIDITY: true,
+    CO2: true,
+    WIND_INDOOR: true,
+    WIND_OUTDOOR: true,
+    LIGHT_DENSITY: true,
+    TILT_STRUCTURAL: true,
+    CAMERA_AI_CROWD: true,
+  },
+
+  setActiveAirport: (airportId) =>
+    set({
+      activeAirport: airportId,
+      planes: [],
+      sensors: [],
+      vehicles: [],
+      tooltips: [],
+      aiForecasts: {},
+      selectedEntityId: null,
+      selectedEntityType: null,
+      metrics: DEFAULT_METRICS,
+    }),
 
   setSimulationMode: (mode) => set({ simulationMode: mode }),
   setImmersiveActive: (active) => set({ isImmersiveActive: active }),
+  setCameraTracking: (tracking) => set({ isCameraTracking: tracking }),
+  setAnalysisMode: (mode) => set({ analysisMode: mode }),
+
+  toggleMapFilter: (key) =>
+    set((state) => ({
+      mapFilters: { ...state.mapFilters, [key]: !state.mapFilters[key] },
+    })),
 
   toggleDashboard: () => {
     const { isDashboardOpen, selectedEntityId } = get();
@@ -143,20 +156,14 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
     });
   },
 
-  selectEntity: (id, type) => {
+  selectEntity: (id, type) =>
     set({
       selectedEntityId: id,
       selectedEntityType: type,
       appState: "entity-focus",
       isDashboardOpen: true,
       analysisMode: false,
-    });
-
-    // ✅ Immediately fetch the full history array when a sensor is clicked
-    if (type === "sensor") {
-      get().syncSensorHistory(id);
-    }
-  },
+    }),
 
   clearSelection: () =>
     set({
@@ -169,115 +176,147 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       isImmersiveActive: false,
     }),
 
-  setCameraTracking: (tracking) => set({ isCameraTracking: tracking }),
-  setAnalysisMode: (mode) => set({ analysisMode: mode }),
+  // ✅ Unified Injection
+  setInitialData: (sensors, planes, vehicles) => {
+    set({
+      sensors,
+      planes,
+      vehicles,
+      metrics: {
+        ...get().metrics,
+        activeFlights: getActiveFlightCount(planes),
+      },
+    });
+  },
 
-  loadPlanes: async (params) => {
-    try {
-      const data = await fetchFlights(params);
-      const cleanPlanes: Plane[] = data.map((p: Plane) => ({
-        ...p,
-        status: p.status as PlaneStatus,
-      }));
-      set({
-        planes: cleanPlanes,
-        metrics: {
-          ...get().metrics,
-          activeFlights: getActiveFlightCount(cleanPlanes),
-        },
+  updatePlaneTelemetryBatch: (telemetryBatch) =>
+    set((state) => {
+      const updatedPlanes = [...state.planes];
+      let hasChanges = false;
+
+      telemetryBatch.forEach((telemetry) => {
+        const existingIdx = updatedPlanes.findIndex(
+          (p) => p.id === telemetry.id,
+        );
+        if (existingIdx >= 0) {
+          hasChanges = true;
+          const existingPlane = updatedPlanes[existingIdx];
+
+          let newPath = [...(existingPlane.path || [])];
+          if (telemetry.position) {
+            const lastPos = newPath[newPath.length - 1];
+            if (lastPos) {
+              const diffX = Math.abs(
+                telemetry.position.longitude - lastPos.longitude,
+              );
+              const diffY = Math.abs(
+                telemetry.position.latitude - lastPos.latitude,
+              );
+              if (diffX > 0.05 || diffY > 0.05) newPath = [];
+            }
+            newPath.push(telemetry.position);
+          }
+
+          updatedPlanes[existingIdx] = {
+            ...existingPlane,
+            ...telemetry,
+            ...(telemetry.status && {
+              status: telemetry.status as PlaneStatus,
+            }),
+            path: newPath.slice(-30),
+          };
+        }
       });
-    } catch (e) {
-      console.error("Failed to load planes:", e);
-    }
-  },
 
-  loadSensors: async (params) => {
-    try {
-      const data = await fetchSensors(params);
-      const cleanSensors: Sensor[] = data.map((s: Sensor) => ({
-        ...s,
-        status: s.status as SensorStatus,
-      }));
-      set({ sensors: cleanSensors });
-    } catch (e) {
-      console.error("Failed to load sensors:", e);
-    }
-  },
+      if (!hasChanges) return state;
 
-  hydrateStaticData: async () => {
-    try {
-      const [staticFlights, staticSensors] = await Promise.all([
-        fetchStaticFlights(),
-        fetchStaticSensors(),
-      ]);
-
-      const cleanPlanes = staticFlights.map((f: Plane) => ({
-        ...f,
-        status: "UNKNOWN",
-        speed: 0,
-        altitude: 0,
-        heading: 0,
-        position: { longitude: 0, latitude: 0, z: 0 },
-        path: [],
-      }));
-
-      const cleanSensors = staticSensors.map((s: Sensor) => ({
-        ...s,
-        status: "ACTIVE",
-        currentValue: 0,
-        unit: getUnitForType(s.type),
-        history: [],
-        position: { longitude: s.x, latitude: s.y, z: s.z },
-      }));
-
-      set({
-        planes: cleanPlanes,
-        sensors: cleanSensors,
+      return {
+        planes: updatedPlanes,
         metrics: {
-          ...get().metrics,
-          activeFlights: getActiveFlightCount(cleanPlanes),
+          ...state.metrics,
+          activeFlights: getActiveFlightCount(updatedPlanes),
         },
+      };
+    }),
+
+  updateVehicleTelemetryBatch: (telemetryBatch) =>
+    set((state) => {
+      const updatedVehicles = [...(state.vehicles || [])];
+      let hasChanges = false;
+
+      telemetryBatch.forEach((telemetry) => {
+        const existingIdx = updatedVehicles.findIndex(
+          (v) => v.id === telemetry.id,
+        );
+
+        if (existingIdx >= 0) {
+          hasChanges = true;
+          const existingVehicle = updatedVehicles[existingIdx];
+
+          let newPath = [...(existingVehicle.path || [])];
+          if (telemetry.position) {
+            const lastPos = newPath[newPath.length - 1];
+            if (lastPos) {
+              const diffX = Math.abs(
+                telemetry.position.longitude - lastPos.longitude,
+              );
+              const diffY = Math.abs(
+                telemetry.position.latitude - lastPos.latitude,
+              );
+              if (diffX > 0.05 || diffY > 0.05) newPath = [];
+            }
+            newPath.push(telemetry.position);
+          }
+
+          updatedVehicles[existingIdx] = {
+            ...existingVehicle,
+            ...telemetry,
+            ...(telemetry.status && {
+              status: telemetry.status as VehicleStatus,
+            }),
+            ...(telemetry.type && {
+              type: telemetry.type as VehicleType,
+            }),
+            path: newPath.slice(-15),
+          };
+        } else {
+          // ✅ NEW: Dynamically register unknown vehicles streaming from WebSocket
+          hasChanges = true;
+          updatedVehicles.push({
+            id: telemetry.id!,
+            callsign: telemetry.id!,
+            licensePlate: telemetry.id!,
+            type: (telemetry.type as VehicleType) || "OTHER",
+            status: (telemetry.status as VehicleStatus) || "IDLE",
+            brand: null,
+            carModel: null,
+            companyName: null,
+            speed: telemetry.speed || 0,
+            heading: telemetry.heading || 0,
+            position: telemetry.position || { longitude: 0, latitude: 0, z: 0 },
+            path: telemetry.position ? [telemetry.position] : [],
+          } as Vehicle);
+        }
       });
-    } catch (e) {
-      console.error("Failed to hydrate static data:", e);
-    }
-  },
 
-  // ✅ New focused action to fetch the exact 100 items for ONE sensor
-  syncSensorHistory: async (sensorId: string) => {
-    try {
-      const rawData = await fetchSensorHistory(sensorId);
+      if (!hasChanges) return state;
+      return { vehicles: updatedVehicles };
+    }),
 
-      // Ensure it's mapped to the exact primitive format the chart component expects
-      const formattedHistory = rawData.map((d: SensorLog) => ({
-        timestamp: d.timestamp,
-        value: d.value,
-      }));
-
-      set((state) => ({
-        historicalData: {
-          ...state.historicalData,
-          [sensorId]: formattedHistory,
-        },
-      }));
-    } catch (error) {
-      console.error(`Failed to fetch history for sensor ${sensorId}:`, error);
-    }
-  },
-
-  // ✅ 5-Minute Polling Action optimized to only fetch data for the active sensor
-  syncHeavyData: async () => {
-    try {
-      const state = get();
-
-      // Instead of downloading logs for the whole airport, only update the sensor the user is actually looking at.
-      if (state.selectedEntityType === "sensor" && state.selectedEntityId) {
-        await state.syncSensorHistory(state.selectedEntityId);
+  updateSensorTelemetry: (id, value, status) =>
+    set((state) => {
+      const existingIdx = state.sensors.findIndex((s) => s.id === id);
+      if (existingIdx >= 0) {
+        const updatedSensors = [...state.sensors];
+        updatedSensors[existingIdx] = {
+          ...updatedSensors[existingIdx],
+          currentValue: value,
+          ...(status && { status: status as SensorStatus }),
+        };
+        return { sensors: updatedSensors };
       }
-    } catch (error) {
-      console.error("Failed to sync heavy data:", error);
-    }
-  },
+      return state;
+    }),
 
   updateTooltip: (tooltip) =>
     set((state) => {
@@ -324,190 +363,27 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       return { tooltips: newTooltips };
     }),
 
-  setInitialData: (sensors, planes) => {
-    const cleanPlanes = planes.map((plane) => ({
-      ...plane,
-      status: plane.status as PlaneStatus,
-    }));
-    const cleanSensors = sensors.map((sensor) => ({
-      ...sensor,
-      status: sensor.status as SensorStatus,
-    }));
-    set({
-      sensors: cleanSensors,
-      planes: cleanPlanes,
-      metrics: {
-        ...get().metrics,
-        activeFlights: getActiveFlightCount(cleanPlanes),
-      },
-    });
-  },
-
-  updatePlaneTelemetry: (telemetry) =>
-    set((state) => {
-      const cleanStatus = telemetry.status as PlaneStatus | undefined;
-      const existingIdx = state.planes.findIndex((p) => p.id === telemetry.id);
-
-      if (existingIdx >= 0) {
-        const updatedPlanes = [...state.planes];
-        const existingPlane = updatedPlanes[existingIdx];
-
-        let newPath = [...(existingPlane.path || [])];
-        if (telemetry.position) {
-          const lastPos = newPath[newPath.length - 1];
-          if (lastPos) {
-            const diffX = Math.abs(
-              telemetry.position.longitude - lastPos.longitude,
-            );
-            const diffY = Math.abs(
-              telemetry.position.latitude - lastPos.latitude,
-            );
-            if (diffX > 0.05 || diffY > 0.05) {
-              newPath = [];
-            }
-          }
-          newPath.push(telemetry.position);
-        }
-
-        updatedPlanes[existingIdx] = {
-          ...existingPlane,
-          ...telemetry,
-          ...(cleanStatus && { status: cleanStatus }),
-          path: newPath.slice(-30),
-        };
-        const activeCount = getActiveFlightCount(updatedPlanes);
-        return {
-          planes: updatedPlanes,
-          ...(activeCount !== state.metrics.activeFlights && {
-            metrics: { ...state.metrics, activeFlights: activeCount },
-          }),
-        };
-      }
-      return state;
-    }),
-
-  updatePlaneTelemetryBatch: (telemetryBatch) =>
-    set((state) => {
-      const updatedPlanes = [...state.planes];
-      let hasChanges = false;
-
-      telemetryBatch.forEach((telemetry) => {
-        const existingIdx = updatedPlanes.findIndex(
-          (p) => p.id === telemetry.id,
-        );
-        if (existingIdx >= 0) {
-          hasChanges = true;
-          const existingPlane = updatedPlanes[existingIdx];
-          const cleanStatus = telemetry.status as PlaneStatus | undefined;
-
-          let newPath = [...(existingPlane.path || [])];
-          if (telemetry.position) {
-            const lastPos = newPath[newPath.length - 1];
-            if (lastPos) {
-              const diffX = Math.abs(
-                telemetry.position.longitude - lastPos.longitude,
-              );
-              const diffY = Math.abs(
-                telemetry.position.latitude - lastPos.latitude,
-              );
-              if (diffX > 0.05 || diffY > 0.05) {
-                newPath = [];
-              }
-            }
-            newPath.push(telemetry.position);
-          }
-
-          updatedPlanes[existingIdx] = {
-            ...existingPlane,
-            ...telemetry,
-            ...(cleanStatus && { status: cleanStatus }),
-            path: newPath.slice(-30),
-          };
-        }
-      });
-
-      if (!hasChanges) return state;
-
-      const activeCount = getActiveFlightCount(updatedPlanes);
-      return {
-        planes: updatedPlanes,
-        ...(activeCount !== state.metrics.activeFlights && {
-          metrics: { ...state.metrics, activeFlights: activeCount },
-        }),
-      };
-    }),
-
-  updateSensorTelemetry: (id, value, status) =>
-    set((state) => {
-      const existingIdx = state.sensors.findIndex((s) => s.id === id);
-      if (existingIdx >= 0) {
-        const updatedSensors = [...state.sensors];
-        const sensor = updatedSensors[existingIdx];
-
-        updatedSensors[existingIdx] = {
-          ...sensor,
-          currentValue: value,
-          ...(status && { status: status as SensorStatus }),
-        };
-        return { sensors: updatedSensors };
-      }
-      return state;
-    }),
+  updateAIForecast: (payload) =>
+    set((state) => ({
+      aiForecasts: { ...state.aiForecasts, [payload.sensorId]: payload },
+    })),
 
   getSelectedPlane: () => {
     const { selectedEntityId, selectedEntityType, planes } = get();
-    if (selectedEntityType !== "plane" || !selectedEntityId) return null;
-    return planes.find((p) => p.id === selectedEntityId) ?? null;
+    return selectedEntityType === "plane"
+      ? (planes.find((p) => p.id === selectedEntityId) ?? null)
+      : null;
   },
-
   getSelectedSensor: () => {
     const { selectedEntityId, selectedEntityType, sensors } = get();
-    if (selectedEntityType !== "sensor" || !selectedEntityId) return null;
-    return sensors.find((s) => s.id === selectedEntityId) ?? null;
+    return selectedEntityType === "sensor"
+      ? (sensors.find((s) => s.id === selectedEntityId) ?? null)
+      : null;
   },
-
-  updateAIForecast: (payload) =>
-    set((state) => ({
-      aiForecasts: {
-        ...state.aiForecasts,
-        [payload.sensorId]: payload,
-      },
-    })),
-
-  mapFilters: {
-    planes: true,
-    TEMPERATURE: true,
-    TARMAC_TEMP: true,
-    HUMIDITY: true,
-    CO2: true,
-    WIND_INDOOR: true,
-    WIND_OUTDOOR: true,
-    LIGHT_DENSITY: true,
-    TILT_STRUCTURAL: true,
-    CAMERA_AI_CROWD: true,
-  },
-
-  toggleMapFilter: (key) =>
-    set((state) => ({
-      mapFilters: { ...state.mapFilters, [key]: !state.mapFilters[key] },
-    })),
-
-  syncSimulationStatus: async () => {
-    try {
-      const status = await fetchSimulationStatus();
-      if (!status) return;
-
-      if (!status.isRunning) {
-        console.log("Simulation asleep. Auto-igniting engine...");
-        await startSimulation();
-        set({ simulationMode: "GENERAL" });
-      } else if (status.activeScenario && status.activeScenario !== "NONE") {
-        set({ simulationMode: status.activeScenario as SimulationMode });
-      } else {
-        set({ simulationMode: "GENERAL" });
-      }
-    } catch (error) {
-      console.error("Failed to sync simulation status:", error);
-    }
+  getSelectedVehicle: () => {
+    const { selectedEntityId, selectedEntityType, vehicles } = get();
+    return selectedEntityType === "vehicle"
+      ? (vehicles.find((v) => v.id === selectedEntityId) ?? null)
+      : null;
   },
 }));

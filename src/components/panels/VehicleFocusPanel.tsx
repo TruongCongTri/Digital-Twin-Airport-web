@@ -3,25 +3,24 @@ import { BentoPanel, BentoBox } from "./BentoPanel";
 import { useAirportStore } from "@/src/store/airport-store";
 import { useMemo } from "react";
 import {
-  Plane,
   Navigation,
   X,
-  Weight,
   Radio,
   ChevronLeft,
   ChevronRight,
   LocateFixed,
   Check,
-  PlaneLanding,
-  PlaneTakeoff,
-  RefreshCcw,
-  Users,
   Activity,
+  Car,
+  Crown,
+  MapPin,
+  CarFront,
+  ShieldCheck,
+  BatteryCharging,
 } from "lucide-react";
 import { ElementType, ReactNode } from "react";
 import {
   ComposedChart,
-  Line,
   Bar,
   XAxis,
   YAxis,
@@ -30,6 +29,7 @@ import {
   CartesianGrid,
   ReferenceLine,
 } from "recharts";
+import type { VehicleType } from "@/types";
 
 const boxClass =
   "bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-sm p-5 pointer-events-auto";
@@ -39,18 +39,23 @@ const AIRPORT_NAMES: Record<string, string> = {
   VVTS: "Tan Son Nhat",
 };
 
-// ✅ AIRLINE BRANDING ENGINE
-const AIRLINE_THEMES: Record<
+// ✅ VEHICLE BRANDING ENGINE based on VehicleType
+const VEHICLE_THEMES: Record<
   string,
   { bg: string; text: string; accent: string }
 > = {
-  VJ: { bg: "bg-[#DF2027]", text: "text-white", accent: "bg-[#F2B000]" }, // VietJet Air
-  VN: { bg: "bg-[#005F6E]", text: "text-white", accent: "bg-[#D4B572]" }, // Vietnam Airlines
-  QH: { bg: "bg-[#00894F]", text: "text-white", accent: "bg-[#00A1E4]" }, // Bamboo Airways
-  CX: { bg: "bg-[#006564]", text: "text-white", accent: "bg-[#B2A97E]" }, // Cathay Pacific
-  SQ: { bg: "bg-[#002244]", text: "text-white", accent: "bg-[#F2A900]" }, // Singapore Airlines
-  EK: { bg: "bg-[#D71920]", text: "text-white", accent: "bg-[#D4AF37]" }, // Emirates
-  NH: { bg: "bg-[#002B5E]", text: "text-white", accent: "bg-[#00A0E9]" }, // ANA
+  PERSONAL_CAR: {
+    bg: "bg-slate-700",
+    text: "text-white",
+    accent: "bg-slate-300",
+  },
+  TAXI: { bg: "bg-amber-500", text: "text-black", accent: "bg-yellow-100" },
+  RIDE_HAIL: { bg: "bg-[#00AF54]", text: "text-white", accent: "bg-[#008940]" }, // Grab green
+  VIP_TRANSFER: {
+    bg: "bg-[#2D1B4E]",
+    text: "text-white",
+    accent: "bg-[#D4AF37]",
+  }, // Purple/Gold
   DEFAULT: { bg: "bg-gray-800", text: "text-white", accent: "bg-blue-500" },
 };
 
@@ -60,7 +65,8 @@ const CHART_COLORS: Record<string, string> = {
   "bg-indigo-500": "#6366f1",
   "bg-amber-500": "#f59e0b",
   "bg-red-500": "#ef4444",
-  "bg-orange-500": "#f97316",
+  "bg-purple-500": "#a855f7",
+  "bg-slate-500": "#64748b",
 };
 
 const FauxBarcode = () => (
@@ -87,7 +93,8 @@ interface DispatchTicketProps {
   };
   children: ReactNode;
 }
-// ✅ REUSABLE TICKET WRAPPER FOR DOSSIER MODULES
+
+// ✅ REUSABLE TICKET WRAPPER
 const DispatchTicket = ({
   title,
   tag,
@@ -130,124 +137,84 @@ const DispatchTicket = ({
   </div>
 );
 
-export function PlaneFocusPanel() {
+export function VehicleFocusPanel() {
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const selectEntity = useAirportStore((state) => state.selectEntity);
   const clearSelection = useAirportStore((state) => state.clearSelection);
-  const planes = useAirportStore((state) => state.planes);
-  const plane = useAirportStore((state) => state.getSelectedPlane());
+  const vehicles = useAirportStore((state) => state.vehicles || []);
+  const vehicle = useAirportStore((state) => state.getSelectedVehicle());
 
-  // ✅ Fetch active airport context from store (URL sync is handled by DashboardToggle)
   const activeAirport =
     useAirportStore((state) => state.activeAirport) || "VVLT";
   const currentAirportName = AIRPORT_NAMES[activeAirport] || "Long Thanh";
 
-  // ✅ PERFORMANCE FIX: Memoize the index calculation
-  const totalPlanes = planes.length;
-  const planeId = plane?.id;
+  const totalVehicles = vehicles.length;
+  const vehicleId = vehicle?.id;
 
   const currentIndex = useMemo(() => {
-    return planeId ? planes.findIndex((p) => p.id === planeId) : -1;
-  }, [planeId, planes]);
+    return vehicleId ? vehicles.findIndex((v) => v.id === vehicleId) : -1;
+  }, [vehicleId, vehicles]);
 
-  if (!isDashboardOpen || !plane) return null;
+  if (!isDashboardOpen || !vehicle) return null;
 
-  const pathLen = plane.path?.length || 0;
+  const pathLen = vehicle.path?.length || 0;
   const speedHistory =
-    plane.path?.map((p, i) => ({
+    vehicle.path?.map((p, i) => ({
       time: `-${pathLen - i}s`,
       speed: Math.max(
         0,
-        (plane.speed || 0) - Math.abs(Math.sin(i * 12.9898)) * 5,
+        (vehicle.speed || 0) - Math.abs(Math.sin(i * 12.9898)) * 2,
       ),
-      altitude: plane.altitude || 0,
     })) || [];
 
   const handlePrev = () => {
-    const prevIndex = currentIndex <= 0 ? totalPlanes - 1 : currentIndex - 1;
-    selectEntity(planes[prevIndex].id, "plane");
+    const prevIndex = currentIndex <= 0 ? totalVehicles - 1 : currentIndex - 1;
+    selectEntity(vehicles[prevIndex].id, "vehicle");
   };
 
   const handleNext = () => {
-    const nextIndex = currentIndex >= totalPlanes - 1 ? 0 : currentIndex + 1;
-    selectEntity(planes[nextIndex].id, "plane");
+    const nextIndex = currentIndex >= totalVehicles - 1 ? 0 : currentIndex + 1;
+    selectEntity(vehicles[nextIndex].id, "vehicle");
   };
 
-  const callsign =
-    plane.callsign || plane.flightNumber || plane.id || "UNKNOWN";
-  const airlineCode = callsign.substring(0, 2).toUpperCase();
-  const brandTheme = AIRLINE_THEMES[airlineCode] || AIRLINE_THEMES["DEFAULT"];
+  const licensePlate = vehicle.licensePlate || vehicle.id || "UNKNOWN";
+  const typeStr = (vehicle.type || "OTHER") as VehicleType;
+  const brandTheme = VEHICLE_THEMES[typeStr] || VEHICLE_THEMES["DEFAULT"];
 
-  const airline = plane.airline || "Unknown Carrier";
-  const weight = plane.weight || 245000;
-  const gate = plane.parkingStand?.code || plane.gate || "TBA";
-  const status = plane.status || "UNKNOWN";
-  const origin = plane.origin || "---";
-  const dest = plane.destination || "---";
-
-  const statusStr = (plane.status || "UNKNOWN").toUpperCase();
+  const company =
+    vehicle.companyName ||
+    (typeStr === "PERSONAL_CAR" ? "Private" : "Unknown Auth");
+  const model =
+    vehicle.brand && vehicle.carModel
+      ? `${vehicle.brand} ${vehicle.carModel}`
+      : "Standard Sedan";
+  const statusStr = (vehicle.status || "UNKNOWN").toUpperCase();
 
   // ==========================================
   // DIRECTIONAL SEQUENCE & COLOR ENGINE
   // ==========================================
-  const isOutbound = plane.direction === "OUTBOUND";
-  const isParked = plane.direction === "TURNAROUND";
-
-  const outboundSteps = [
-    { label: "Gate" },
-    { label: "Pushback" },
-    { label: "Taxi Out" },
-    { label: "Takeoff" },
-    { label: "Airborne" },
-  ];
-  const inboundSteps = [
+  const sequenceSteps = [
     { label: "En Route" },
-    { label: "Approach" },
-    { label: "Landed" },
-    { label: "Taxi In" },
-    { label: "At Gate" },
-  ];
-  const turnaroundSteps = [
-    { label: "Arrival" },
-    { label: "De-board" },
-    { label: "Service" },
-    { label: "Boarding" },
-    { label: "Ready" },
+    { label: "Drop-off" },
+    { label: "Parked" },
+    { label: "Pick-up" },
+    { label: "Exiting" },
   ];
 
-  let activeSteps = inboundSteps;
   let currentStepIndex = 0;
-  let trackerTitle = "Arrival Sequence";
-  let TrackerIcon = PlaneLanding;
+  const trackerTitle = "Terminal Approach Ops";
+  const TrackerIcon = CarFront;
+
+  // Dynamic colors based on vehicle type
   let dirColors = {
-    text: "text-emerald-600",
-    bg: "bg-emerald-50",
-    border: "border-emerald-200",
-    fill: "bg-emerald-500",
-    shadow: "shadow-[0_0_15px_rgba(16,185,129,0.5)]",
+    text: "text-slate-600",
+    bg: "bg-slate-50",
+    border: "border-slate-200",
+    fill: "bg-slate-500",
+    shadow: "shadow-[0_0_15px_rgba(100,116,139,0.5)]",
   };
 
-  if (isOutbound) {
-    activeSteps = outboundSteps;
-    trackerTitle = "Departure Sequence";
-    TrackerIcon = PlaneTakeoff;
-    dirColors = {
-      text: "text-indigo-600",
-      bg: "bg-indigo-50",
-      border: "border-indigo-200",
-      fill: "bg-indigo-500",
-      shadow: "shadow-[0_0_15px_rgba(79,70,229,0.5)]",
-    };
-
-    if (["PUSHBACK"].includes(statusStr)) currentStepIndex = 1;
-    else if (["TAXIING"].includes(statusStr)) currentStepIndex = 2;
-    else if (["DEPARTING", "TAKEOFF"].includes(statusStr)) currentStepIndex = 3;
-    else if (["DEPARTED", "EN ROUTE"].includes(statusStr)) currentStepIndex = 4;
-    else currentStepIndex = 0;
-  } else if (isParked) {
-    activeSteps = turnaroundSteps;
-    trackerTitle = "Turnaround Ops";
-    TrackerIcon = RefreshCcw;
+  if (typeStr === "TAXI") {
     dirColors = {
       text: "text-amber-600",
       bg: "bg-amber-50",
@@ -255,38 +222,34 @@ export function PlaneFocusPanel() {
       fill: "bg-amber-500",
       shadow: "shadow-[0_0_15px_rgba(245,158,11,0.5)]",
     };
-
-    if (statusStr === "BOARDING") currentStepIndex = 3;
-    else if (statusStr === "PARKED") currentStepIndex = 2;
-    else currentStepIndex = 0;
-  } else {
-    // INBOUND
-    if (["APPROACHING"].includes(statusStr)) currentStepIndex = 1;
-    else if (["LANDED"].includes(statusStr)) currentStepIndex = 2;
-    else if (["TAXIING"].includes(statusStr)) currentStepIndex = 3;
-    else if (["PARKED"].includes(statusStr)) currentStepIndex = 4;
+  } else if (typeStr === "VIP_TRANSFER") {
+    dirColors = {
+      text: "text-purple-600",
+      bg: "bg-purple-50",
+      border: "border-purple-200",
+      fill: "bg-purple-500",
+      shadow: "shadow-[0_0_15px_rgba(168,85,247,0.5)]",
+    };
+  } else if (typeStr === "RIDE_HAIL") {
+    dirColors = {
+      text: "text-emerald-600",
+      bg: "bg-emerald-50",
+      border: "border-emerald-200",
+      fill: "bg-emerald-500",
+      shadow: "shadow-[0_0_15px_rgba(16,185,129,0.5)]",
+    };
   }
 
-  // Override colors if there is an operational anomaly
-  const isError = ["CANCELLED", "DIVERTED"].includes(statusStr);
-  const isWarning = statusStr === "DELAYED";
+  if (statusStr === "APPROACHING_DROP_OFF") currentStepIndex = 0;
+  else if (statusStr === "DROPPING_OFF") currentStepIndex = 1;
+  else if (statusStr === "PARKED") currentStepIndex = 2;
+  else if (statusStr === "APPROACHING_PICK_UP" || statusStr === "PICKING_UP")
+    currentStepIndex = 3;
+  else if (statusStr === "EXITING") currentStepIndex = 4;
 
-  if (isError)
-    dirColors = {
-      text: "text-red-600",
-      bg: "bg-red-50",
-      border: "border-red-500",
-      fill: "bg-red-500",
-      shadow: "shadow-[0_0_15px_rgba(239,68,68,0.5)]",
-    };
-  else if (isWarning)
-    dirColors = {
-      text: "text-orange-600",
-      bg: "bg-orange-50",
-      border: "border-orange-500",
-      fill: "bg-orange-500",
-      shadow: "shadow-[0_0_15px_rgba(249,115,22,0.5)]",
-    };
+  const isExiting = statusStr === "EXITING";
+  const origin = isExiting ? "T1" : "CITY";
+  const dest = isExiting ? "CITY" : "T1";
 
   return (
     <>
@@ -305,7 +268,7 @@ export function PlaneFocusPanel() {
               <ChevronLeft size={16} />
             </button>
             <span className="text-[10px] font-mono font-bold text-gray-500 w-10 text-center select-none tracking-widest">
-              {currentIndex + 1}/{totalPlanes}
+              {currentIndex + 1}/{totalVehicles}
             </span>
             <button
               onClick={handleNext}
@@ -322,7 +285,7 @@ export function PlaneFocusPanel() {
           </button>
         </div>
 
-        {/* PRIMARY FLIGHT TICKET */}
+        {/* PRIMARY VEHICLE TICKET */}
         <div className="w-full rounded-2xl flex flex-col shadow-lg border border-gray-200/80 bg-white shrink-0 relative overflow-hidden">
           <div className="absolute -left-3 top-[56px] w-6 h-6 bg-[#f7f7f8] rounded-full border-r border-gray-200 z-10 shadow-inner" />
           <div className="absolute -right-3 top-[56px] w-6 h-6 bg-[#f7f7f8] rounded-full border-l border-gray-200 z-10 shadow-inner" />
@@ -332,32 +295,34 @@ export function PlaneFocusPanel() {
             className={`${brandTheme.bg} ${brandTheme.text} px-5 py-3 flex justify-between items-center relative z-0`}
           >
             <div className="flex items-center gap-3">
-              {plane.logoUrl ? (
+              {vehicle.logoUrl ? (
                 <div className="bg-white p-1 rounded-md shadow-sm h-8 w-8 flex items-center justify-center">
                   <img
-                    src={plane.logoUrl}
+                    src={vehicle.logoUrl}
                     className="max-h-full max-w-full object-contain"
-                    alt={airline}
+                    alt={company}
                   />
                 </div>
+              ) : typeStr === "VIP_TRANSFER" ? (
+                <Crown size={24} className="opacity-80" />
               ) : (
-                <Plane size={24} className="opacity-80" />
+                <Car size={24} className="opacity-80" />
               )}
               <span className="font-bold text-xs uppercase tracking-widest opacity-90">
-                {airline}
+                {company}
               </span>
             </div>
             <div
-              className={`text-[10px] font-mono px-2 py-1 rounded shadow-sm ${brandTheme.accent} text-black font-black tracking-wider`}
+              className={`text-[10px] font-mono px-2 py-1 rounded shadow-sm ${brandTheme.accent} ${typeStr === "TAXI" ? "text-black" : "text-gray-900"} font-black tracking-wider`}
             >
-              {callsign}
+              {licensePlate}
             </div>
           </div>
 
           {/* Ticket Body */}
           <div className="px-6 py-5 flex justify-between items-center bg-[#fafafa] border-b border-dashed border-gray-300">
             <div className="text-center w-[30%]">
-              <div className="text-4xl font-black text-gray-800 tracking-tighter">
+              <div className="text-3xl font-black text-gray-800 tracking-tighter">
                 {origin}
               </div>
               <div className="text-[9px] text-gray-400 uppercase font-bold tracking-widest mt-1">
@@ -367,19 +332,19 @@ export function PlaneFocusPanel() {
 
             <div className="flex flex-col items-center w-[40%] px-2 relative -top-2">
               <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">
-                Direct
+                {typeStr.replace(/_/g, " ")}
               </div>
               <div className="w-full flex items-center relative">
                 <div className="w-1.5 h-1.5 rounded-full border border-gray-300 bg-white z-10" />
                 <div className="flex-1 border-t-2 border-dashed border-gray-300 mx-1" />
-                <Plane size={16} className="text-gray-400 rotate-90 z-10" />
+                <CarFront size={16} className="text-gray-400 rotate-90 z-10" />
                 <div className="flex-1 border-t-2 border-dashed border-gray-300 mx-1" />
                 <div className="w-1.5 h-1.5 rounded-full border border-gray-300 bg-[#1e3a8a] z-10" />
               </div>
             </div>
 
             <div className="text-center w-[30%]">
-              <div className="text-4xl font-black text-gray-800 tracking-tighter">
+              <div className="text-3xl font-black text-gray-800 tracking-tighter">
                 {dest}
               </div>
               <div className="text-[9px] text-gray-400 uppercase font-bold tracking-widest mt-1">
@@ -394,18 +359,18 @@ export function PlaneFocusPanel() {
               <div className="flex justify-between items-center pr-6">
                 <div>
                   <div className="text-[8px] text-gray-400 uppercase tracking-wider font-bold">
-                    Class
+                    Vehicle Type
                   </div>
-                  <div className="text-xs font-black text-gray-800">
-                    VIP / ATC
+                  <div className="text-xs font-black text-gray-800 truncate max-w-[80px]">
+                    {typeStr.replace(/_/g, " ")}
                   </div>
                 </div>
                 <div>
                   <div className="text-[8px] text-gray-400 uppercase tracking-wider font-bold">
-                    Gate
+                    Model
                   </div>
-                  <div className="text-xs font-black text-[#1e3a8a]">
-                    {gate}
+                  <div className="text-xs font-black text-[#1e3a8a] truncate max-w-[100px]">
+                    {model}
                   </div>
                 </div>
                 <div>
@@ -413,9 +378,9 @@ export function PlaneFocusPanel() {
                     Status
                   </div>
                   <div
-                    className={`text-xs font-black uppercase ${dirColors.text}`}
+                    className={`text-[10px] font-black uppercase ${dirColors.text}`}
                   >
-                    {status}
+                    {statusStr.replace(/_/g, " ")}
                   </div>
                 </div>
               </div>
@@ -436,16 +401,16 @@ export function PlaneFocusPanel() {
             <LocateFixed size={14} strokeWidth={2.5} />
           </div>
 
-          {plane.imageUrl ? (
+          {vehicle.imageUrl ? (
             <img
-              src={plane.imageUrl}
-              alt={callsign || plane.id}
+              src={vehicle.imageUrl}
+              alt={licensePlate}
               className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-700"
             />
           ) : (
-            <Plane
+            <Car
               size={40}
-              className="text-gray-300 absolute group-hover:scale-110 group-hover:-rotate-12 transition-all duration-500"
+              className="text-gray-300 absolute group-hover:scale-110 transition-all duration-500"
             />
           )}
         </BentoBox>
@@ -453,15 +418,15 @@ export function PlaneFocusPanel() {
         {/* ✅ DYNAMIC DIRECTIONAL SEQUENCE TICKET */}
         <DispatchTicket
           title={trackerTitle}
-          tag={plane.direction || "UNKNOWN"}
+          tag={statusStr}
           icon={TrackerIcon}
-          footerText="Live Sequence Tracking"
+          footerText="Live Curbside Tracking"
           theme={brandTheme}
         >
           <div className="relative flex justify-between items-center w-full px-2 py-4">
             <div className="absolute left-6 right-6 top-1/2 -translate-y-1/2 h-1 bg-gray-200 rounded-full z-0" />
             <div className="absolute left-6 right-6 top-1/2 -translate-y-1/2 flex justify-evenly items-center z-0 pointer-events-none">
-              {activeSteps.slice(1).map((_, i) => (
+              {sequenceSteps.slice(1).map((_, i) => (
                 <ChevronRight key={i} size={14} className="text-gray-300" />
               ))}
             </div>
@@ -469,11 +434,11 @@ export function PlaneFocusPanel() {
             <div
               className={`absolute left-6 top-1/2 -translate-y-1/2 h-1 rounded-full z-0 transition-all duration-700 ease-out ${dirColors.fill}`}
               style={{
-                width: `calc((100% - 48px) * ${Math.min(1, Math.max(0, currentStepIndex / (activeSteps.length - 1)))})`,
+                width: `calc((100% - 48px) * ${Math.min(1, Math.max(0, currentStepIndex / (sequenceSteps.length - 1)))})`,
               }}
             />
 
-            {activeSteps.map((step, index) => {
+            {sequenceSteps.map((step, index) => {
               const isPast = currentStepIndex > index;
               const isActive = currentStepIndex === index;
 
@@ -511,18 +476,18 @@ export function PlaneFocusPanel() {
           </div>
         </DispatchTicket>
 
-        {/* ✅ ATC RADIO CLEARANCE TICKET */}
+        {/* ✅ FLEET DISPATCH CLEARANCE */}
         <DispatchTicket
-          title="ATC Radio Clearance"
-          tag="COMMS"
-          icon={Radio}
-          footerText="Frequencies Active"
+          title="Security & Auth Clearance"
+          tag="DISPATCH"
+          icon={ShieldCheck}
+          footerText="Zone Authorizations"
           theme={brandTheme}
         >
           <div className="space-y-3">
             <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
               <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
-                Delivery (118.1)
+                Outer Perimeter (LPR)
               </span>
               <span className="text-xs font-bold font-mono text-green-600 tracking-wider">
                 CLEARED
@@ -530,18 +495,20 @@ export function PlaneFocusPanel() {
             </div>
             <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
               <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
-                Ground (121.9)
+                Curbside Drop-off
               </span>
               <span className="text-xs font-bold font-mono text-green-600 tracking-wider">
-                CLEARED
+                AUTH OK
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
-                Tower (118.7)
+                VIP Apron Access
               </span>
-              <span className="text-xs font-bold font-mono text-amber-600 tracking-wider">
-                STANDBY
+              <span
+                className={`text-xs font-bold font-mono tracking-wider ${typeStr === "VIP_TRANSFER" ? "text-green-600" : "text-red-500"}`}
+              >
+                {typeStr === "VIP_TRANSFER" ? "CLEARED" : "DENIED"}
               </span>
             </div>
           </div>
@@ -558,153 +525,68 @@ export function PlaneFocusPanel() {
           className={`${boxClass} py-3 flex justify-between items-center shrink-0 sticky top-0 z-50`}
         >
           <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-            <Navigation size={14} className="text-[#1e3a8a]" />{" "}
-            {currentAirportName} Ops
+            <MapPin size={14} className="text-[#1e3a8a]" /> {currentAirportName}{" "}
+            Terminal
           </h2>
           <div className="text-[10px] font-black tracking-widest text-[#1e3a8a] bg-blue-50 px-2 py-1 rounded border border-blue-100 uppercase">
-            Stand {gate}
+            Curbside
           </div>
         </BentoBox>
 
-        {/* ✅ ADS-B TELEMETRY TICKET */}
+        {/* ✅ GPS TELEMETRY TICKET */}
         <DispatchTicket
-          title="ADS-B Navigational Vectors"
-          tag="TELEMETRY"
+          title="GPS Telemetry Vectors"
+          tag="LIVE DATA"
           icon={Navigation}
           footerText="Transmitting"
           footerColor="text-blue-500"
           theme={brandTheme}
         >
           <div className="grid grid-cols-4 gap-2">
-            <div className="text-center">
+            <div className="text-center col-span-2 border-r border-gray-200">
               <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
-                SQUAWK
+                LATITUDE
               </div>
-              <div className="text-sm font-bold font-mono text-[#1e3a8a]">
-                7700
+              <div className="text-xs font-bold font-mono text-[#1e3a8a]">
+                {vehicle.position.latitude.toFixed(6)}°
               </div>
             </div>
-            <div className="text-center">
+            <div className="text-center col-span-2">
               <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
-                VERT/S
+                LONGITUDE
               </div>
-              <div className="text-sm font-bold font-mono text-gray-800">
-                {isOutbound ? "+" : "-"}
-                {(plane.altitude || 0) > 10000 ? 1200 : 850}{" "}
-                <span className="text-[8px] text-gray-400">FPM</span>
+              <div className="text-xs font-bold font-mono text-[#1e3a8a]">
+                {vehicle.position.longitude.toFixed(6)}°
               </div>
             </div>
-            <div className="text-center">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
-                TRACK
-              </div>
-              <div className="text-sm font-bold font-mono text-gray-800">
-                {Math.floor(plane.heading || 0)}°
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
-                MACH
-              </div>
-              <div className="text-sm font-bold font-mono text-gray-800">
-                {((plane.speed || 0) / 666).toFixed(2)}
-              </div>
-            </div>
-          </div>
-        </DispatchTicket>
 
-        {/* ✅ W&B LOADSHEET TICKET */}
-        <DispatchTicket
-          title="Weight & Balance Payload"
-          tag="LOADSHEET"
-          icon={Weight}
-          footerText="Validated"
-          footerColor="text-green-600"
-          theme={brandTheme}
-        >
-          <div className="grid grid-cols-2 gap-y-4">
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Zero Fuel (ZFW)
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                {Math.floor(weight * 0.6).toLocaleString()} KG
-              </span>
+            <div className="text-center mt-3 border-t border-gray-200 pt-3">
+              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+                HEADING
+              </div>
+              <div className="text-sm font-bold font-mono text-gray-800">
+                {Math.floor(vehicle.heading || 0)}°
+              </div>
             </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Trip Fuel
-              </span>
-              <span className="text-xs font-bold font-mono text-[#1e3a8a]">
-                {Math.floor(weight * 0.2).toLocaleString()} KG
-              </span>
+            <div className="text-center mt-3 border-t border-gray-200 pt-3 col-span-2">
+              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+                EST SPEED
+              </div>
+              <div className="text-sm font-bold font-mono text-gray-800">
+                {Math.floor(vehicle.speed || 0)}{" "}
+                <span className="text-[8px] text-gray-400">KPH</span>
+              </div>
             </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                {isOutbound ? "Takeoff Wt" : "Landing Wt"}
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                {weight.toLocaleString()} KG
-              </span>
-            </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                CG (MAC %)
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                26.4%
-              </span>
-            </div>
-          </div>
-        </DispatchTicket>
-
-        {/* ✅ PASSENGER MANIFEST TICKET */}
-        <DispatchTicket
-          title="Passenger Manifest"
-          tag="PAX-DOC"
-          icon={Users}
-          footerText="Finalized"
-          footerColor="text-gray-500"
-          theme={brandTheme}
-        >
-          <div className="grid grid-cols-2 gap-y-4">
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Total Souls
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                296{" "}
-                <span className="text-[9px] text-gray-400 font-sans tracking-normal">
-                  (284 Pax / 12 Crew)
-                </span>
-              </span>
-            </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Class Breakdown
-              </span>
-              <span className="text-xs font-bold font-mono text-[#1e3a8a]">
-                J: 32 | Y: 252
-              </span>
-            </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Checked Bags
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                312{" "}
-                <span className="text-[9px] text-gray-400 font-sans tracking-normal">
-                  (4,680 KG)
-                </span>
-              </span>
-            </div>
-            <div>
-              <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
-                Special Hndlg
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                4 WCHR / 1 AVIH
-              </span>
+            <div className="text-center mt-3 border-t border-gray-200 pt-3">
+              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+                BATTERY
+              </div>
+              <div className="text-sm font-bold font-mono text-gray-800 flex items-center justify-center gap-1">
+                <BatteryCharging size={10} className="text-emerald-500" />
+                {vehicle.batteryLevel !== undefined
+                  ? `${vehicle.batteryLevel}%`
+                  : "N/A"}
+              </div>
             </div>
           </div>
         </DispatchTicket>
@@ -723,9 +605,9 @@ export function PlaneFocusPanel() {
               Live Velocity
             </span>
             <div className="text-lg font-black text-[#1e3a8a]">
-              {Math.floor(plane.speed || 0)}{" "}
+              {Math.floor(vehicle.speed || 0)}{" "}
               <span className="text-[10px] text-gray-400 font-bold tracking-widest">
-                KTS
+                KPH
               </span>
             </div>
           </div>
@@ -754,22 +636,13 @@ export function PlaneFocusPanel() {
                   axisLine={false}
                 />
                 <Tooltip contentStyle={{ fontSize: "10px" }} />
-                <ReferenceLine y={25} stroke="red" strokeDasharray="3 3" />
+                <ReferenceLine y={40} stroke="red" strokeDasharray="3 3" />
                 <Bar
                   dataKey="speed"
                   fill={CHART_COLORS[dirColors.fill] || "#1e3a8a"}
                   radius={[2, 2, 0, 0]}
                   barSize={8}
-                  name="Speed (kts)"
-                  isAnimationActive={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="altitude"
-                  stroke="#1e3a8a"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Alt (ft)"
+                  name="Speed (kph)"
                   isAnimationActive={false}
                 />
               </ComposedChart>

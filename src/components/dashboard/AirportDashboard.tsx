@@ -3,8 +3,6 @@ import { useMemo, useState, ElementType, ReactNode, useEffect } from "react";
 import { BentoPanel, BentoBox } from "@/src/components/panels/BentoPanel";
 import { useAirportStore } from "@/src/store/airport-store";
 
-// Note: To optimize build times, ensure `optimizePackageImports: ['lucide-react']`
-// is present in your next.config.js file.
 import {
   LayoutDashboard,
   BarChart3,
@@ -50,6 +48,8 @@ import {
 } from "@/components/ui/table";
 import { PLANE_STATUS_CONFIG } from "@/src/lib/status-config";
 import { PlaneStatus } from "@/types";
+import { useQuery } from "@tanstack/react-query";
+import { fetchAllSensorLogs } from "@/src/lib/api-client";
 
 export interface TimeDataPoint {
   time: string;
@@ -81,6 +81,11 @@ type ViewMode = "standard" | "analytics";
 type AnalyticsTab = "AIR_TRAFFIC" | "GROUND_OPS" | "ENVIRONMENT";
 type ListFilter = "planes" | "sensors";
 
+const AIRPORT_NAMES: Record<string, string> = {
+  VVLT: "Long Thanh",
+  VVTS: "Tan Son Nhat",
+};
+
 const boxClass =
   "bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-sm p-5 pointer-events-auto";
 
@@ -102,6 +107,13 @@ const SyncBadge = ({ className = "" }: { className?: string }) => (
     <Clock size={8} /> 5-MIN UPDATE
   </div>
 );
+
+export interface SensorLogPayload {
+  id: string;
+  sensorId: string;
+  value: number;
+  timestamp: string;
+}
 
 interface BriefingCardProps {
   title: string;
@@ -218,50 +230,68 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
 }
 
 export function AirportDashboard() {
+  const [currentTime, setCurrentTime] = useState<number>(0);
+
+  // Zustand State (Fast path + UI state)
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
+  const planes = useAirportStore((state) => state.planes);
+  const sensors = useAirportStore((state) => state.sensors);
+  const metrics = useAirportStore((state) => state.metrics);
+  const activeAirport =
+    useAirportStore((state) => state.activeAirport) || "VVLT";
 
-  // ✅ PERFORMANCE FIX: Removed reactive Zustand subscriptions to prevent 60FPS re-renders
-  const [throttledData, setThrottledData] = useState(() => {
-    const state = useAirportStore.getState();
-    return {
-      planes: state.planes,
-      sensors: state.sensors,
-      metrics: state.metrics,
-      historicalData: state.historicalData,
-      lastUpdated: Date.now(),
-    };
-  });
+  const showDashboard = isDashboardOpen && !selectedEntityId;
+  const currentAirportName = AIRPORT_NAMES[activeAirport] || "Long Thanh";
 
-  // ✅ Imperative sync interval decoupled from map frame updates
-  useEffect(() => {
-    if (!isDashboardOpen) return;
-
-    const syncData = () => {
-      const state = useAirportStore.getState();
-      setThrottledData({
-        planes: state.planes,
-        sensors: state.sensors,
-        metrics: state.metrics,
-        historicalData: state.historicalData,
-        lastUpdated: Date.now(),
-      });
-    };
-
-    syncData();
-    const interval = setInterval(syncData, 300000);
-
-    return () => clearInterval(interval);
-  }, [isDashboardOpen]);
-
-  const { planes, sensors, metrics, historicalData, lastUpdated } =
-    throttledData;
-
+  // Local UI State
   const [viewMode, setViewMode] = useState<ViewMode>("standard");
   const [analyticsTab, setAnalyticsTab] = useState<AnalyticsTab>("AIR_TRAFFIC");
   const [listFilter, setListFilter] = useState<ListFilter>("planes");
 
-  const showDashboard = isDashboardOpen && !selectedEntityId;
+  // --- 1. PURE CLOCK HYDRATION (Fixed Cascade Render Error) ---
+  useEffect(() => {
+    if (!isDashboardOpen) return;
+
+    const initTimer = setTimeout(() => {
+      setCurrentTime(Date.now());
+    }, 0);
+
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 60000);
+
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(interval);
+    };
+  }, [isDashboardOpen]);
+
+  // --- 2. TANSTACK QUERY ---
+  const { data: rawLogs = [] } = useQuery({
+    // Add activeAirport to the queryKey so it refetches cleanly when switching airports
+    queryKey: ["allSensorLogs", activeAirport],
+    queryFn: () => fetchAllSensorLogs(activeAirport),
+    enabled: showDashboard,
+    refetchInterval: 300000, // 5 mins
+  });
+
+  // --- 3. FIX: TRANSFORM ARRAY TO DICTIONARY ---
+  const historicalData = useMemo(() => {
+    const dict: Record<string, { timestamp: string; value: number }[]> = {};
+    if (Array.isArray(rawLogs)) {
+      rawLogs.forEach((log: SensorLogPayload) => {
+        if (!dict[log.sensorId]) {
+          dict[log.sensorId] = [];
+        }
+        dict[log.sensorId].push({
+          timestamp: log.timestamp,
+          value: log.value,
+        });
+      });
+    }
+    return dict;
+  }, [rawLogs]);
 
   const planeStatuses = useMemo(() => {
     return (Object.keys(PLANE_STATUS_CONFIG) as PlaneStatus[])
@@ -287,90 +317,94 @@ export function AirportDashboard() {
       .map((k) => ({ name: k, count: airlineCounts[k] }))
       .sort((a, b) => b.count - a.count);
 
-    const DATA_POINTS = 20;
     const data: TimeDataPoint[] = [];
-    const activeGroundPlanes = planes.filter((p) =>
-      ["LANDED", "TAXIING", "PARKED", "BOARDING", "PUSHBACK"].includes(
-        p.status as string,
-      ),
-    ).length;
 
-    const tempSensors = sensors.filter((s) => s.type.includes("TEMP"));
-    const humSensors = sensors.filter((s) => s.type.includes("HUMIDITY"));
-    const windSensors = sensors.filter((s) => s.type.includes("WIND"));
-    const tiltSensors = sensors.filter((s) => s.type.includes("TILT"));
-    const co2Sensors = sensors.filter((s) => s.type.includes("CO2"));
+    if (currentTime !== 0) {
+      const DATA_POINTS = 20;
+      const activeGroundPlanes = planes.filter((p) =>
+        ["LANDED", "TAXIING", "PARKED", "BOARDING", "PUSHBACK"].includes(
+          p.status as string,
+        ),
+      ).length;
 
-    const getAvg = (sensorGroup: typeof sensors, index: number) => {
-      if (!sensorGroup.length) return 0;
-      let sum = 0,
-        count = 0;
-      for (const s of sensorGroup) {
-        const histArr = historicalData[s.id] || [];
-        const histIndex = Math.floor((index / DATA_POINTS) * histArr.length);
-        const h = histArr[histIndex] || histArr[histArr.length - 1];
+      const tempSensors = sensors.filter((s) => s.type.includes("TEMP"));
+      const humSensors = sensors.filter((s) => s.type.includes("HUMIDITY"));
+      const windSensors = sensors.filter((s) => s.type.includes("WIND"));
+      const tiltSensors = sensors.filter((s) => s.type.includes("TILT"));
+      const co2Sensors = sensors.filter((s) => s.type.includes("CO2"));
 
-        if (h) {
-          sum += h.value;
-          count++;
-        } else {
-          sum += s.currentValue;
-          count++;
+      const getAvg = (sensorGroup: typeof sensors, index: number) => {
+        if (!sensorGroup.length) return 0;
+        let sum = 0,
+          count = 0;
+        for (const s of sensorGroup) {
+          const histArr = historicalData[s.id] || [];
+          const histIndex = Math.floor((index / DATA_POINTS) * histArr.length);
+          const h = histArr[histIndex] || histArr[histArr.length - 1];
+
+          if (h) {
+            sum += h.value;
+            count++;
+          } else {
+            sum += s.currentValue;
+            count++;
+          }
         }
+        return count ? sum / count : 0;
+      };
+
+      for (let i = 0; i < DATA_POINTS; i++) {
+        const t = new Date(currentTime - (DATA_POINTS - 1 - i) * 60000);
+        const timeLabel = t.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+
+        const noise = Math.sin(i) * 2;
+        const baseSec = 5;
+        const basePower = 200;
+
+        data.push({
+          time: timeLabel,
+          temp: Number(getAvg(tempSensors, i).toFixed(1)),
+          hum: Number(getAvg(humSensors, i).toFixed(1)),
+          wind: Number(getAvg(windSensors, i).toFixed(1)),
+          tilt: Number((getAvg(tiltSensors, i) * 1000).toFixed(2)),
+          co2: Number(getAvg(co2Sensors, i).toFixed(0)),
+          flights: Math.max(
+            5,
+            Math.floor(activeGroundPlanes * 1.2 + 15 + noise * 2.5),
+          ),
+          capacity: 50,
+          taxiIn: Math.max(
+            2,
+            Math.floor(activeGroundPlanes * 0.4 + 8 + Math.cos(i) * 2),
+          ),
+          taxiOut: Math.max(
+            2,
+            Math.floor(activeGroundPlanes * 0.5 + 10 + noise * 1.5),
+          ),
+          secT1: Math.max(2, baseSec + activeGroundPlanes * 0.4 + noise),
+          secT2: Math.max(
+            2,
+            baseSec - 1 + activeGroundPlanes * 0.35 + noise * 0.8,
+          ),
+          secT3: Math.max(
+            2,
+            baseSec - 2 + activeGroundPlanes * 0.25 + noise * 0.5,
+          ),
+          powerT1: basePower + activeGroundPlanes * 12 + noise * 10,
+          powerT2: basePower - 20 + activeGroundPlanes * 10 + noise * 8,
+          powerT3: basePower - 50 + activeGroundPlanes * 7 + noise * 6,
+          gseFuel: Math.max(2, Math.floor(activeGroundPlanes * 0.3)),
+          gseBag: Math.max(4, Math.floor(activeGroundPlanes * 0.8)),
+        });
       }
-      return count ? sum / count : 0;
-    };
-
-    for (let i = 0; i < DATA_POINTS; i++) {
-      const t = new Date(lastUpdated - (DATA_POINTS - 1 - i) * 60000);
-      const timeLabel = t.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
-
-      const noise = Math.sin(i) * 2;
-      const baseSec = 5;
-      const basePower = 200;
-
-      data.push({
-        time: timeLabel,
-        temp: Number(getAvg(tempSensors, i).toFixed(1)),
-        hum: Number(getAvg(humSensors, i).toFixed(1)),
-        wind: Number(getAvg(windSensors, i).toFixed(1)),
-        tilt: Number((getAvg(tiltSensors, i) * 1000).toFixed(2)),
-        co2: Number(getAvg(co2Sensors, i).toFixed(0)),
-        flights: Math.max(
-          5,
-          Math.floor(activeGroundPlanes * 1.2 + 15 + noise * 2.5),
-        ),
-        capacity: 50,
-        taxiIn: Math.max(
-          2,
-          Math.floor(activeGroundPlanes * 0.4 + 8 + Math.cos(i) * 2),
-        ),
-        taxiOut: Math.max(
-          2,
-          Math.floor(activeGroundPlanes * 0.5 + 10 + noise * 1.5),
-        ),
-        secT1: Math.max(2, baseSec + activeGroundPlanes * 0.4 + noise),
-        secT2: Math.max(
-          2,
-          baseSec - 1 + activeGroundPlanes * 0.35 + noise * 0.8,
-        ),
-        secT3: Math.max(
-          2,
-          baseSec - 2 + activeGroundPlanes * 0.25 + noise * 0.5,
-        ),
-        powerT1: basePower + activeGroundPlanes * 12 + noise * 10,
-        powerT2: basePower - 20 + activeGroundPlanes * 10 + noise * 8,
-        powerT3: basePower - 50 + activeGroundPlanes * 7 + noise * 6,
-        gseFuel: Math.max(2, Math.floor(activeGroundPlanes * 0.3)),
-        gseBag: Math.max(4, Math.floor(activeGroundPlanes * 0.8)),
-      });
     }
+
     return { timeData: data, airlineData };
-  }, [sensors, planes, historicalData, lastUpdated]);
+  }, [sensors, planes, historicalData, currentTime]);
 
   const latestData = timeData[timeData.length - 1] || {
     secT1: 18,
@@ -390,8 +424,8 @@ export function AirportDashboard() {
           className={`${boxClass} flex justify-between items-center py-3 shrink-0 sticky top-0 z-50`}
         >
           <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-            <LayoutDashboard size={16} className="text-[#1e3a8a]" /> Control
-            Ledger
+            <LayoutDashboard size={16} className="text-[#1e3a8a]" />{" "}
+            {currentAirportName} Ledger
           </h2>
           <div className="flex bg-gray-100 p-1 rounded-lg">
             <button
@@ -613,8 +647,8 @@ export function AirportDashboard() {
             className={`${boxClass} py-3 px-4 flex justify-between items-center shrink-0 sticky top-0 z-50`}
           >
             <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-              <ListFilter size={16} className="text-[#1e3a8a]" /> Master
-              Directory
+              <ListFilter size={16} className="text-[#1e3a8a]" />{" "}
+              {currentAirportName} Directory
             </h2>
             <div className="flex bg-gray-100 p-1 rounded-lg">
               <button

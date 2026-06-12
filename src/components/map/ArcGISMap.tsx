@@ -1,4 +1,3 @@
-// advance map filters
 "use client";
 import { useAirportStore } from "@/src/store/airport-store";
 import {
@@ -27,6 +26,7 @@ import {
   MessageSquare,
   MessageSquareOff,
   BarChart2,
+  Car, // ✅ Changed to Car for civilian traffic
 } from "lucide-react";
 
 import type Collection from "@arcgis/core/core/Collection";
@@ -48,9 +48,22 @@ import type SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
 import type PointSymbol3D from "@arcgis/core/symbols/PointSymbol3D";
 import type ObjectSymbol3DLayer from "@arcgis/core/symbols/ObjectSymbol3DLayer";
 
-import { Plane, TooltipData } from "@/types";
+import { Plane, TooltipData, Vehicle } from "@/types";
 import { APP_CONFIG } from "@/constants/app.constant";
-import { LONG_THANH_COORDS } from "@/constants/airport-coordinate";
+import {
+  TAN_SON_NHAT_COORDS,
+  LONG_THANH_COORDS,
+} from "@/constants/airport-coordinate";
+
+type CoordPoint = { lat: number; lng: number };
+
+type RouteGroup = {
+  taxiPath?: CoordPoint[];
+  flightInbound?: CoordPoint[];
+  inbound?: CoordPoint[];
+  flightOutbound?: CoordPoint[];
+  outbound?: CoordPoint[];
+};
 
 type BasemapOption = { id: string; label: string; icon: ElementType };
 interface WatchHandle {
@@ -153,6 +166,9 @@ const getSensorColumnProps = (type: string, val: number) => {
   return { color: [156, 163, 175, 0.55], height: 30 };
 };
 
+// ✅ SAFE ARRAY REFERENCE: Must be declared outside component
+const EMPTY_VEHICLES: Vehicle[] = [];
+
 export function ArcGISMap() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<SceneView | null>(null);
@@ -160,6 +176,7 @@ export function ArcGISMap() {
 
   const planeLayerRef = useRef<GraphicsLayer | null>(null);
   const sensorLayerRef = useRef<GraphicsLayer | null>(null);
+  const vehicleLayerRef = useRef<GraphicsLayer | null>(null);
   const pathLayerRef = useRef<GraphicsLayer | null>(null);
   const airlineLabelLayerRef = useRef<GraphicsLayer | null>(null);
   const footprintLayerRef = useRef<GraphicsLayer | null>(null);
@@ -187,26 +204,29 @@ export function ArcGISMap() {
   const [isMapReady, setIsMapReady] = useState(false);
   const [isSensorsExpanded, setIsSensorsExpanded] = useState(false);
 
+  const activeAirport = useAirportStore((state) => state.activeAirport);
   const planes = useAirportStore((state) => state.planes);
   const sensors = useAirportStore((state) => state.sensors);
+  const vehicles = useAirportStore((state) => state.vehicles ?? EMPTY_VEHICLES);
+
   const selectEntity = useAirportStore((state) => state.selectEntity);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
   const selectedEntityType = useAirportStore(
     (state) => state.selectedEntityType,
   );
+
   const isImmersiveActive = useAirportStore((state) => state.isImmersiveActive);
   const focusedSensor = useAirportStore((state) => state.getSelectedSensor());
 
   const mapFilters = useAirportStore((state) => state.mapFilters);
   const toggleMapFilter = useAirportStore((state) => state.toggleMapFilter);
 
-  // Exclude planes, and derived tooltips/cylinders from the pure sensor list
   const filterKeys = useMemo(() => Object.keys(mapFilters), [mapFilters]);
   const sensorKeys = useMemo(
     () =>
       filterKeys.filter(
         (k) =>
-          !["planes", "tooltips", "cylinders"].includes(k) &&
+          !["planes", "vehicles", "tooltips", "cylinders"].includes(k) &&
           !k.startsWith("tooltips_") &&
           !k.startsWith("cylinders_"),
       ),
@@ -273,7 +293,6 @@ export function ArcGISMap() {
     const focusedId = store.selectedEntityId;
     const focusedType = store.selectedEntityType;
 
-    // Check specific Plane configurations
     const planesVisible = store.mapFilters["planes"] !== false;
     const planeTooltipsOn = store.mapFilters["tooltips_planes"] !== false;
 
@@ -302,7 +321,33 @@ export function ArcGISMap() {
       });
     }
 
-    // Check individual Sensor configurations
+    const vehiclesVisible = store.mapFilters["vehicles"] !== false;
+    const vehicleTooltipsOn = store.mapFilters["tooltips_vehicles"] !== false;
+
+    if (vehiclesVisible && vehicleTooltipsOn && store.vehicles) {
+      store.vehicles.forEach((vehicle) => {
+        if (focusedType === "vehicle" && focusedId && focusedId !== vehicle.id)
+          return;
+
+        const screen = view.toScreen(
+          new PointClass({
+            longitude: getLon(vehicle),
+            latitude: getLat(vehicle),
+            z: 5,
+            spatialReference: { wkid: 4326 },
+          }),
+        );
+        if (screen)
+          rawTooltips.push({
+            entityId: vehicle.id,
+            entityType: "vehicle",
+            screenX: Math.round(screen.x),
+            screenY: Math.round(screen.y),
+            visible: true,
+          });
+      });
+    }
+
     store.sensors.forEach((sensor) => {
       const sensorTypeVisible = store.mapFilters[sensor.type] !== false;
       const sensorTooltipOn =
@@ -354,6 +399,7 @@ export function ArcGISMap() {
     store.updateAllTooltips(visibleTooltips);
   }, []);
 
+  // Map Initialization & Core Layout Definition
   useEffect(() => {
     if (!mapContainerRef.current) return;
     let destroyed = false;
@@ -438,6 +484,11 @@ export function ArcGISMap() {
         screenSizePerspectiveEnabled: false,
         elevationInfo: { mode: "relative-to-scene", offset: 10 },
       });
+      const vehicleLayer = new GraphicsLayer({
+        title: "Vehicles",
+        screenSizePerspectiveEnabled: false,
+        elevationInfo: { mode: "relative-to-scene", offset: 5 },
+      });
       const sensorLayer = new GraphicsLayer({
         title: "Sensors",
         elevationInfo: { mode: "relative-to-scene", offset: 25 },
@@ -454,6 +505,7 @@ export function ArcGISMap() {
         maskLayer,
         pathLayer,
         sensorLayer,
+        vehicleLayer,
         planeLayer,
         labelLayer,
       ]);
@@ -461,43 +513,47 @@ export function ArcGISMap() {
       airlineLabelLayerRef.current = labelLayer;
       footprintLayerRef.current = footprintLayer;
       maskLayerRef.current = maskLayer;
+      vehicleLayerRef.current = vehicleLayer;
 
-      const BLUEPRINT_TERMINAL = [
-        [107.040861, 10.773008],
-        [107.042759, 10.774047],
-        [107.042577, 10.774639],
-        [107.043748, 10.77805],
-        [107.043299, 10.778206],
-        [107.042145, 10.775303],
-        [107.040021, 10.774733],
-        [107.037716, 10.777674],
-        [107.037345, 10.777429],
-        [107.039399, 10.774209],
-        [107.038298, 10.772529],
-        [107.03506, 10.77231],
-        [107.035053, 10.771838],
-        [107.038784, 10.771958],
-        [107.039264, 10.771533],
-        [107.040861, 10.773008],
-      ];
-      const BLUEPRINT_TARMAC = [
-        [107.064904, 10.8024],
-        [107.06668, 10.800358],
-        [107.026931, 10.770569],
-        [107.025036, 10.773454],
-        [107.064904, 10.8024],
-      ];
+      // DYNAMIC FOOTPRINTS BASED ON ACTIVE AIRPORT
+      const isVVTS = activeAirport === "VVTS";
+
+      const BLUEPRINT_TERMINAL = isVVTS
+        ? [
+            TAN_SON_NHAT_COORDS.TERMINALS.DOMESTIC.area.map((p) => [
+              p.lng,
+              p.lat,
+            ]),
+            TAN_SON_NHAT_COORDS.TERMINALS.INTERNATIONAL.area.map((p) => [
+              p.lng,
+              p.lat,
+            ]),
+          ]
+        : [LONG_THANH_COORDS.TERMINALS.MAIN.area.map((p) => [p.lng, p.lat])];
+
+      const BLUEPRINT_TARMAC = isVVTS
+        ? [
+            TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25L_07R.area.map((p) => [
+              p.lng,
+              p.lat,
+            ]),
+            TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25R_07L.area.map((p) => [
+              p.lng,
+              p.lat,
+            ]),
+          ]
+        : [LONG_THANH_COORDS.RUNWAYS.MAIN.area.map((p) => [p.lng, p.lat])];
 
       footprintLayer.addMany([
         new GraphicClass({
-          geometry: new PolygonClass({ rings: [BLUEPRINT_TERMINAL] }),
+          geometry: new PolygonClass({ rings: BLUEPRINT_TERMINAL }),
           symbol: new SimpleFillClass({
             color: [0, 0, 0, 0],
             outline: { color: [255, 255, 255, 0.8], width: 2, style: "solid" },
           }),
         }),
         new GraphicClass({
-          geometry: new PolygonClass({ rings: [BLUEPRINT_TARMAC] }),
+          geometry: new PolygonClass({ rings: BLUEPRINT_TARMAC }),
           symbol: new SimpleFillClass({
             color: [0, 0, 0, 0],
             outline: { color: [255, 255, 255, 0.8], width: 2, style: "solid" },
@@ -505,10 +561,14 @@ export function ArcGISMap() {
         }),
       ]);
 
+      const initialCenter = isVVTS
+        ? TAN_SON_NHAT_COORDS.CENTER
+        : LONG_THANH_COORDS.CENTER;
+
       const view = new SceneView({
         container: mapContainerRef.current!,
         map,
-        center: [APP_CONFIG.COORDINATE.X, APP_CONFIG.COORDINATE.Y],
+        center: [initialCenter.lng, initialCenter.lat],
         zoom: 15,
         environment: {
           background: { type: "color", color: [247, 247, 248, 1] },
@@ -526,13 +586,26 @@ export function ArcGISMap() {
       await view.when();
       if (destroyed) return;
 
-      const terminals = ["T1", "T2", "T3"] as const;
-      terminals.forEach((term) => {
-        const routes = LONG_THANH_COORDS.ROUTES[term];
+      // Draw Routes
+      const routeGroups: RouteGroup[] = isVVTS
+        ? [
+            TAN_SON_NHAT_COORDS.ROUTES.DOMESTIC,
+            TAN_SON_NHAT_COORDS.ROUTES.INTERNATIONAL,
+          ]
+        : [
+            LONG_THANH_COORDS.ROUTES.T1,
+            LONG_THANH_COORDS.ROUTES.T2,
+            LONG_THANH_COORDS.ROUTES.T3,
+          ];
+
+      routeGroups.forEach((routes) => {
+        const inboundArray = routes.flightInbound || routes.inbound || [];
+        const outboundArray = routes.flightOutbound || routes.outbound || [];
+
         staticRoutesLayer.addMany([
           new GraphicClass({
             geometry: new PolylineClass({
-              paths: [routes.inbound.map((pt) => [pt.lng, pt.lat])],
+              paths: [inboundArray.map((pt) => [pt.lng, pt.lat])],
             }),
             symbol: new LineClass({
               color: new ColorClass([16, 185, 129, 0.35]),
@@ -542,7 +615,7 @@ export function ArcGISMap() {
           }),
           new GraphicClass({
             geometry: new PolylineClass({
-              paths: [routes.outbound.map((pt) => [pt.lng, pt.lat])],
+              paths: [outboundArray.map((pt) => [pt.lng, pt.lat])],
             }),
             symbol: new LineClass({
               color: new ColorClass([245, 158, 11, 0.35]),
@@ -551,6 +624,22 @@ export function ArcGISMap() {
             }),
           }),
         ]);
+
+        // Add Ground Vehicle paths if available
+        if (routes.taxiPath && routes.taxiPath.length > 0) {
+          staticRoutesLayer.add(
+            new GraphicClass({
+              geometry: new PolylineClass({
+                paths: [routes.taxiPath.map((pt) => [pt.lng, pt.lat])],
+              }),
+              symbol: new LineClass({
+                color: new ColorClass([168, 162, 158, 0.35]), // Gray for ground vehicles
+                width: 2,
+                style: "solid",
+              }),
+            }),
+          );
+        }
       });
 
       view.on("click", async (event) => {
@@ -571,10 +660,14 @@ export function ArcGISMap() {
       });
 
       handleMapReset = () => {
+        const center =
+          activeAirport === "VVTS"
+            ? TAN_SON_NHAT_COORDS.CENTER
+            : LONG_THANH_COORDS.CENTER;
         if (!view.destroyed)
           view.goTo(
             {
-              center: [APP_CONFIG.COORDINATE.X, APP_CONFIG.COORDINATE.Y],
+              center: [center.lng, center.lat],
               zoom: 15,
               tilt: 60,
             },
@@ -593,9 +686,9 @@ export function ArcGISMap() {
 
               const cameraHeading = view.camera.heading || 0;
 
+              // Rotate Planes
               const currentPlanes = useAirportStore.getState().planes;
               const planeMap = new Map(currentPlanes.map((p) => [p.id, p]));
-
               planeLayerRef.current?.graphics.forEach((g) => {
                 const plane = planeMap.get(g.attributes.id);
                 if (plane && g.symbol) {
@@ -624,6 +717,19 @@ export function ArcGISMap() {
                   g.symbol = updatedSymbol;
                 }
               });
+
+              // Rotate Vehicles
+              const currentVehicles = useAirportStore.getState().vehicles;
+              const vehicleMap = new Map(currentVehicles.map((v) => [v.id, v]));
+              vehicleLayerRef.current?.graphics.forEach((g) => {
+                const vehicle = vehicleMap.get(g.attributes.id);
+                if (vehicle && g.symbol) {
+                  const visualHeading = (vehicle.heading || 0) - cameraHeading;
+                  const updatedSymbol = g.symbol.clone() as PictureMarkerSymbol;
+                  updatedSymbol.angle = visualHeading;
+                  g.symbol = updatedSymbol;
+                }
+              });
             });
           }
         },
@@ -645,7 +751,33 @@ export function ArcGISMap() {
         viewRef.current = null;
       }
     };
-  }, [currentBasemap, syncTooltips, selectEntity]);
+  }, [currentBasemap, syncTooltips, selectEntity, activeAirport]);
+
+  // Handle Switch Airport Event smoothly without tearing down the map
+  useEffect(() => {
+    const handleSwitchAirport = (e: CustomEvent) => {
+      const { coords } = e.detail;
+      if (viewRef.current && !viewRef.current.destroyed) {
+        viewRef.current.goTo(
+          {
+            center: [coords[0], coords[1]],
+            zoom: 15,
+            tilt: 60,
+          },
+          { duration: 2500, easing: "ease-in-out" },
+        );
+      }
+    };
+    window.addEventListener(
+      "switch-airport",
+      handleSwitchAirport as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "switch-airport",
+        handleSwitchAirport as EventListener,
+      );
+  }, []);
 
   // CAMERA ZOOM CONTROLLER
   useEffect(() => {
@@ -674,6 +806,18 @@ export function ArcGISMap() {
           { duration: 1500, easing: "ease-in-out" },
         );
       }
+    } else if (selectedEntityId && selectedEntityType === "vehicle") {
+      const vehicle = vehicles.find((v) => v.id === selectedEntityId);
+      if (vehicle) {
+        viewRef.current.goTo(
+          {
+            center: [getLon(vehicle), getLat(vehicle)],
+            zoom: 21,
+            tilt: 65,
+          },
+          { duration: 1500, easing: "ease-in-out" },
+        );
+      }
     }
   }, [
     selectedEntityId,
@@ -682,6 +826,7 @@ export function ArcGISMap() {
     isMapReady,
     focusedSensor,
     planes,
+    vehicles,
   ]);
 
   // IMMERSIVE NATIVE 3D HEATMAP ENGINE
@@ -732,46 +877,55 @@ export function ArcGISMap() {
 
       const isTarmac =
         targetType === "TARMAC_TEMP" || targetType === "WIND_OUTDOOR";
-      const BLUEPRINT_TERMINAL = [
-        [107.040861, 10.773008],
-        [107.042759, 10.774047],
-        [107.042577, 10.774639],
-        [107.043748, 10.77805],
-        [107.043299, 10.778206],
-        [107.042145, 10.775303],
-        [107.040021, 10.774733],
-        [107.037716, 10.777674],
-        [107.037345, 10.777429],
-        [107.039399, 10.774209],
-        [107.038298, 10.772529],
-        [107.03506, 10.77231],
-        [107.035053, 10.771838],
-        [107.038784, 10.771958],
-        [107.039264, 10.771533],
-        [107.040861, 10.773008],
-      ];
-      const BLUEPRINT_TARMAC = [
-        [107.064904, 10.8024],
-        [107.06668, 10.800358],
-        [107.026931, 10.770569],
-        [107.025036, 10.773454],
-        [107.064904, 10.8024],
-      ];
-      const targetBlueprint = isTarmac ? BLUEPRINT_TARMAC : BLUEPRINT_TERMINAL;
+      const isVVTS = activeAirport === "VVTS";
+
+      let targetBlueprint: number[][][] = [];
+
+      if (isVVTS) {
+        targetBlueprint = isTarmac
+          ? [
+              TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25R_07L.area.map((p) => [
+                p.lng,
+                p.lat,
+              ]),
+              TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25L_07R.area.map((p) => [
+                p.lng,
+                p.lat,
+              ]),
+            ]
+          : [
+              TAN_SON_NHAT_COORDS.TERMINALS.DOMESTIC.area.map((p) => [
+                p.lng,
+                p.lat,
+              ]),
+              TAN_SON_NHAT_COORDS.TERMINALS.INTERNATIONAL.area.map((p) => [
+                p.lng,
+                p.lat,
+              ]),
+            ];
+      } else {
+        targetBlueprint = isTarmac
+          ? [LONG_THANH_COORDS.RUNWAYS.MAIN.area.map((p) => [p.lng, p.lat])]
+          : [LONG_THANH_COORDS.TERMINALS.MAIN.area.map((p) => [p.lng, p.lat])];
+      }
 
       const outerRing = [
-        [106.9, 10.9],
-        [107.2, 10.9],
-        [107.2, 10.6],
-        [106.9, 10.6],
-        [106.9, 10.9],
+        [106.0, 11.2],
+        [107.5, 11.2],
+        [107.5, 10.5],
+        [106.0, 10.5],
+        [106.0, 11.2],
       ];
-      const innerRing = [...targetBlueprint].reverse();
+
+      const rings = [outerRing];
+      targetBlueprint.forEach((bp) => {
+        rings.push([...bp].reverse());
+      });
 
       maskLayerRef.current.removeAll();
       maskLayerRef.current.add(
         new GraphicRef.current({
-          geometry: new PolygonRef.current({ rings: [outerRing, innerRing] }),
+          geometry: new PolygonRef.current({ rings }),
           symbol: new SimpleFillRef.current({
             color: [247, 247, 248, 1],
             outline: { color: [100, 116, 139, 1], width: 2, style: "solid" },
@@ -818,7 +972,7 @@ export function ArcGISMap() {
       mapInstanceRef.current?.add(layer);
 
       const targetGeometry = new PolygonRef.current!({
-        rings: [targetBlueprint],
+        rings: [targetBlueprint[0]],
         spatialReference: { wkid: 4326 },
       });
 
@@ -855,9 +1009,15 @@ export function ArcGISMap() {
         heatmapLayerRef.current = null;
       }
     }
-  }, [isImmersiveActive, focusedSensor?.type, isMapReady, sensors]);
+  }, [
+    isImmersiveActive,
+    focusedSensor?.type,
+    isMapReady,
+    sensors,
+    activeAirport,
+  ]);
 
-  // SENSOR LOOP: Draws the 3D WebGL Cylinders (ISOLATION APPLIED)
+  // SENSOR LOOP
   useEffect(() => {
     if (!isMapReady || !sensorLayerRef.current) return;
 
@@ -902,7 +1062,6 @@ export function ArcGISMap() {
         !!selectedEntityId &&
         selectedEntityId !== sensor.id;
 
-      // Individual toggle checks
       if (mapFilters[sensor.type] === false || isAnotherSelected) return;
       if (mapFilters[`cylinders_${sensor.type}`] === false) return;
 
@@ -1112,6 +1271,73 @@ export function ArcGISMap() {
     });
   }, [planes, mapFilters, isMapReady]);
 
+  // ✅ UPDATED VEHICLES LOOP FOR CIVILIAN TRAFFIC
+  useEffect(() => {
+    const PointClass = PointRef.current;
+    const GraphicClass = GraphicRef.current;
+    const PictureMarkerClass = PictureMarkerRef.current;
+
+    if (!vehicleLayerRef.current || !viewRef.current?.ready || !isMapReady)
+      return;
+    if (!PointClass || !GraphicClass || !PictureMarkerClass) return;
+
+    const cameraHeading = viewRef.current.camera.heading || 0;
+
+    vehicles.forEach((vehicle) => {
+      const existingVehicle = vehicleLayerRef.current?.graphics.find(
+        (g) => g.attributes.id === vehicle.id,
+      );
+
+      // Hide vehicles if filtered out or explicitly exiting the airport perimeter
+      if (mapFilters["vehicles"] === false || vehicle.status === "EXITING") {
+        if (existingVehicle) vehicleLayerRef.current?.remove(existingVehicle);
+        return;
+      }
+
+      const vehicleGeom = new PointClass({
+        longitude: getLon(vehicle),
+        latitude: getLat(vehicle),
+        spatialReference: { wkid: 4326 },
+      });
+
+      const visualHeading = (vehicle.heading || 0) - cameraHeading;
+
+      // ✅ Dynamically map civilian vehicle types to corresponding icons
+      let iconUrl = "/car.svg";
+      if (vehicle.type === "TAXI") iconUrl = "/taxi.svg";
+      else if (vehicle.type === "RIDE_HAIL") iconUrl = "/ride-hail.svg";
+      else if (vehicle.type === "VIP_TRANSFER") iconUrl = "/vip-car.svg";
+
+      if (existingVehicle) {
+        existingVehicle.geometry = vehicleGeom;
+        if (existingVehicle.symbol) {
+          const symbol = existingVehicle.symbol.clone() as PictureMarkerSymbol;
+          symbol.angle = visualHeading;
+
+          // Re-assign url smoothly if type payload changes on the fly
+          if (symbol.url !== iconUrl) {
+            symbol.url = iconUrl;
+          }
+
+          existingVehicle.symbol = symbol;
+        }
+      } else {
+        vehicleLayerRef.current?.add(
+          new GraphicClass({
+            geometry: vehicleGeom,
+            symbol: new PictureMarkerClass({
+              url: iconUrl,
+              width: "20px",
+              height: "20px",
+              angle: visualHeading,
+            }),
+            attributes: { id: vehicle.id, type: "vehicle" },
+          }),
+        );
+      }
+    });
+  }, [vehicles, mapFilters, isMapReady]);
+
   return (
     <>
       <div
@@ -1197,11 +1423,11 @@ export function ArcGISMap() {
                     </button>
                   </div>
 
-                  {/* DYNAMIC EXPANDABLE CONTAINER WITH CUSTOM SCROLLBAR */}
                   <div className="p-2 max-h-[70vh] overflow-y-auto custom-scrollbar flex flex-col gap-1">
                     {/* PLANES SECTION */}
                     <div className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-gray-50">
-                      <span className="truncate uppercase text-[10px] tracking-widest text-gray-700">
+                      <span className="flex items-center gap-2 truncate uppercase text-[10px] tracking-widest text-gray-700">
+                        <Navigation size={12} className="text-[#1e3a8a]" />{" "}
                         Planes
                       </span>
                       <div className="flex items-center gap-1">
@@ -1236,9 +1462,47 @@ export function ArcGISMap() {
                       </div>
                     </div>
 
+                    {/* VEHICLES SECTION - UI Updated for Civilian Traffic */}
+                    <div className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-gray-50">
+                      <span className="flex items-center gap-2 truncate uppercase text-[10px] tracking-widest text-gray-700">
+                        <Car size={12} className="text-amber-500" /> Civilian
+                        Traffic
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          title="Toggle Vehicle Tooltips"
+                          onClick={() => toggleMapFilter("tooltips_vehicles")}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {mapFilters["tooltips_vehicles"] !== false ? (
+                            <MessageSquare
+                              size={14}
+                              className="text-[#1e3a8a]"
+                            />
+                          ) : (
+                            <MessageSquareOff
+                              size={14}
+                              className="text-gray-300"
+                            />
+                          )}
+                        </button>
+                        <button
+                          title="Toggle Vehicle Visibility"
+                          onClick={() => toggleMapFilter("vehicles")}
+                          className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        >
+                          {mapFilters["vehicles"] !== false ? (
+                            <Eye size={14} className="text-[#1e3a8a]" />
+                          ) : (
+                            <EyeOff size={14} className="text-gray-300" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
                     {/* SENSORS HEADER SECTION */}
                     <div
-                      className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${allSensorsVisible ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                      className={`mt-2 border-t border-gray-100 flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${allSensorsVisible ? "bg-blue-50" : "hover:bg-gray-50"}`}
                     >
                       <button
                         onClick={() => setIsSensorsExpanded(!isSensorsExpanded)}

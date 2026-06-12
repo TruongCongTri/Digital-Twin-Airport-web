@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { AxiosRequestConfig } from "axios";
 import type {
   Sensor,
   Plane,
@@ -9,7 +9,10 @@ import type {
   Zone,
   Scenario,
   PlaneDirection,
-} from "@/types";
+  Vehicle, // ✅ Added Vehicle export
+  VehicleStatus,
+  VehicleType, // ✅ Added VehicleStatus export
+} from "@/types"; // Make sure Vehicle and VehicleStatus are exported from your types file, or import from store
 
 export const apiClient = axios.create({
   baseURL:
@@ -19,35 +22,7 @@ export const apiClient = axios.create({
   timeout: 10000,
 });
 
-//
-export const fetchStaticFlights = async () => {
-  const res = await apiClient.get("/flights/static");
-  return res.data?.data || [];
-};
-
-export const fetchStaticSensors = async () => {
-  const res = await apiClient.get("/sensors/static");
-  return res.data?.data || [];
-};
-
-export const fetchStaticZones = async () => {
-  const res = await apiClient.get("/zones/static");
-  return res.data?.data || [];
-};
-
-// Bulk fetch endpoints for the 5-minute Slow Path
-export const fetchAllSensorLogs = async () => {
-  try {
-    const res = await apiClient.get("/sensors/logs/all");
-    return res.data?.data || [];
-  } catch (error) {
-    console.error("Failed to fetch bulk sensor logs", error);
-    return [];
-  }
-};
-
 // --- STRICT BACKEND DTOs (Data Transfer Objects) ---
-// These perfectly match the JSON payloads returned by your server
 
 interface RawSensorLog {
   id: string;
@@ -81,6 +56,30 @@ interface RawFlight {
   parkingStand: RawParkingStand | null;
   imageUrl?: string;
   logoUrl?: string;
+}
+
+// ✅ Updated to match the new civilian traffic backend schema
+interface RawVehicle {
+  id: string;
+  licensePlate: string;
+  type: string;
+  status: string;
+  brand: string | null;
+  carModel: string | null;
+  companyName: string | null;
+  airportId: string;
+  createdAt: string;
+  updatedAt: string;
+  imageUrl?: string;
+  logoUrl?: string;
+  lat?: number;
+  latitude?: number;
+  lng?: number;
+  longitude?: number;
+  x?: number;
+  y?: number;
+  heading?: number;
+  speed?: number;
 }
 
 interface RawSensor {
@@ -120,7 +119,12 @@ export interface FlightQueryParams {
   status?: string;
   airline?: string;
 }
-
+export interface VehicleQueryParams {
+  page?: number;
+  limit?: number;
+  status?: string;
+  type?: string;
+}
 export interface SensorQueryParams {
   page?: number;
   limit?: number;
@@ -129,8 +133,38 @@ export interface SensorQueryParams {
   zoneId?: string;
 }
 
-// --- MAPPING HELPERS ---
+export const fetchStaticFlights = async () => {
+  const res = await apiClient.get("/flights/static");
+  return res.data?.data || [];
+};
 
+export const fetchStaticVehicles = async () => {
+  const res = await apiClient.get("/ground-vehicles/static");
+  return res.data?.data || [];
+};
+
+export const fetchStaticSensors = async () => {
+  const res = await apiClient.get("/sensors/static");
+  return res.data?.data || [];
+};
+
+export const fetchStaticZones = async () => {
+  const res = await apiClient.get("/zones/static");
+  return res.data?.data || [];
+};
+export const fetchAllSensorLogs = async (airportId?: string) => {
+  try {
+    const res = await apiClient.get("/sensors/logs/all", {
+      params: { airportId },
+    });
+    return res.data?.data || [];
+  } catch (error) {
+    console.error("Failed to fetch bulk sensor logs", error);
+    return [];
+  }
+};
+
+// --- MAPPING HELPERS ---
 const getUnitForType = (type: string): string => {
   const t = type?.toUpperCase();
   if (t === "TEMPERATURE" || t === "TARMAC_TEMP") return "°C";
@@ -143,30 +177,53 @@ const getUnitForType = (type: string): string => {
   return "";
 };
 
+// ✅ Helper to extract arrays safely regardless of API wrapper
+const extractArray = <T = unknown>(res: unknown): T[] => {
+  if (res && typeof res === "object" && "data" in res) {
+    const resData = (res as { data: unknown }).data;
+    if (!resData) return [];
+    if (Array.isArray(resData)) return resData as T[];
+
+    if (typeof resData === "object") {
+      const innerData = (resData as { data?: unknown }).data;
+      if (Array.isArray(innerData)) return innerData as T[];
+
+      const innerItems = (resData as { items?: unknown }).items;
+      if (Array.isArray(innerItems)) return innerItems as T[];
+    }
+  }
+  return [];
+};
+
 // --- API METHODS ---
+export const fetchInitialTelemetry = async (airportId: string) => {
+  // ✅ Wrapped in .catch() so one missing endpoint doesn't crash the whole UI
+  const safeGet = (url: string, config: AxiosRequestConfig) =>
+    apiClient.get(url, config).catch((err: Error) => {
+      console.warn(`[API Warning] Failed to fetch ${url}`, err.message);
+      return { data: [] };
+    });
 
-export const fetchInitialTelemetry = async () => {
-  // 1. Fetch EVERYTHING in parallel for maximum speed
-  const [sensorsRes, flightsRes, logsRes, zonesRes] = await Promise.all([
-    apiClient.get("/sensors?limit=100"),
-    apiClient.get("/flights?limit=100"),
-    apiClient.get("/sensors/logs/all"),
-    apiClient.get("/zones"),
-  ]);
+  const [sensorsRes, flightsRes, vehiclesRes, logsRes, zonesRes] =
+    await Promise.all([
+      safeGet("/sensors", { params: { limit: 100, airportId } }),
+      safeGet("/flights", { params: { limit: 100, airportId } }),
+      safeGet("/ground-vehicles", { params: { limit: 100, airportId } }),
+      safeGet("/sensors/logs/all", { params: { airportId } }),
+      safeGet("/zones", { params: { airportId } }),
+    ]);
 
-  // Strongly type the raw arrays
-  const rawSensors: RawSensor[] = sensorsRes.data?.data || [];
-  const rawFlights: RawFlight[] = flightsRes.data?.data || [];
-  const rawLogs: RawSensorLog[] = logsRes.data?.data || [];
-  const rawZones: RawZone[] = zonesRes.data?.data || [];
+  // ✅ Safely extract arrays
+  const rawSensors: RawSensor[] = extractArray(sensorsRes);
+  const rawFlights: RawFlight[] = extractArray(flightsRes);
+  const rawVehicles: RawVehicle[] = extractArray(vehiclesRes);
+  const rawLogs: RawSensorLog[] = extractArray(logsRes);
+  const rawZones: RawZone[] = extractArray(zonesRes);
 
-  // 2. Create a high-performance Lookup Map for Zone Names
   const zoneMap = new Map<string, RawZone>();
   rawZones.forEach((z) => zoneMap.set(z.id, z));
 
-  // 3. Map Raw Sensor Data
   const mappedSensors: Sensor[] = rawSensors.map((item: RawSensor) => {
-    // Strongly type the history array mapping
     const historicalData = rawLogs
       .filter((log: RawSensorLog) => log.sensorId === item.id)
       .map((log: RawSensorLog) => ({
@@ -192,8 +249,8 @@ export const fetchInitialTelemetry = async () => {
     return {
       id: item.id,
       name: item.name,
-      type: item.type as SensorType, // Cast to strict UI enum
-      status: item.status as SensorStatus, // Cast to strict UI enum
+      type: item.type as SensorType,
+      status: item.status as SensorStatus,
       x: item.x,
       y: item.y,
       z: item.z,
@@ -223,7 +280,6 @@ export const fetchInitialTelemetry = async () => {
     };
   });
 
-  // 4. Map Raw Flight Data
   const mappedFlights: Plane[] = rawFlights.map((item: RawFlight) => {
     let fallbackPosition = { longitude: 0, latitude: 0, z: 0 };
     if (item.parkingStand) {
@@ -241,7 +297,7 @@ export const fetchInitialTelemetry = async () => {
       airline: item.airline,
       origin: item.origin,
       destination: item.destination,
-      status: item.status as PlaneStatus, // Cast to strict UI enum
+      status: item.status as PlaneStatus,
       direction: item.direction as PlaneDirection,
       assignedRunway: item.assignedRunway || null,
       parkingStandId: item.parkingStandId || null,
@@ -257,7 +313,6 @@ export const fetchInitialTelemetry = async () => {
           }
         : null,
 
-      // Default telemetry (Wait for WebSockets to populate live data)
       speed: 0,
       altitude: 0,
       heading: 0,
@@ -269,9 +324,33 @@ export const fetchInitialTelemetry = async () => {
     };
   });
 
+  // ✅ 5. Map Raw Vehicle Data
+  const mappedVehicles: Vehicle[] = rawVehicles.map((item: RawVehicle) => ({
+    id: item.id,
+    callsign: item.licensePlate,
+    licensePlate: item.licensePlate,
+    type: item.type as VehicleType,
+    status: item.status as VehicleStatus,
+    brand: item.brand,
+    carModel: item.carModel,
+    companyName: item.companyName,
+    speed: item.speed ?? 0,
+    heading: item.heading ?? 0,
+    // Safely parse initial coordinates to prevent 0,0 (Null Island) spawns
+    position: {
+      longitude: item.longitude ?? item.lng ?? item.x ?? 0,
+      latitude: item.latitude ?? item.lat ?? item.y ?? 0,
+      z: 0,
+    },
+    path: [],
+    imageUrl: item.imageUrl,
+    logoUrl: item.logoUrl,
+  }));
+
   return {
     sensors: mappedSensors,
     flights: mappedFlights,
+    vehicles: mappedVehicles,
     logs: rawLogs,
   };
 };
@@ -285,6 +364,24 @@ export const fetchFlights = async (params?: FlightQueryParams) => {
 
 export const fetchFlightTelemetry = async (flightId: string) => {
   const res = await apiClient.get(`/flights/${flightId}/telemetry`);
+  return res.data?.data || [];
+};
+
+// ✅ Ground Vehicle Endpoints
+export const fetchVehicles = async (params?: VehicleQueryParams) => {
+  const res = await apiClient.get("/ground-vehicles", {
+    params: { limit: 100, ...params },
+  });
+  return res.data;
+};
+
+export const fetchVehicleDetail = async (vehicleId: string) => {
+  const res = await apiClient.get(`/ground-vehicles/${vehicleId}`);
+  return res.data?.data || null;
+};
+
+export const fetchVehicleTelemetry = async (vehicleId: string) => {
+  const res = await apiClient.get(`/ground-vehicles/${vehicleId}/telemetry`);
   return res.data?.data || [];
 };
 

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   X,
@@ -16,7 +18,11 @@ import { cn } from "@/lib/utils";
 import { useAirportStore } from "../store/airport-store";
 import { DirectoryDropdown } from "./DirectoryDropdown";
 import { toast } from "sonner";
-import { startScenario, rebootSimulation } from "../lib/api-client";
+import {
+  startScenario,
+  rebootSimulation,
+  fetchSimulationStatus,
+} from "../lib/api-client";
 import { Scenario } from "@/types";
 
 const DEMO_SCENARIOS = [
@@ -27,25 +33,126 @@ const DEMO_SCENARIOS = [
   "EARTHQUAKE",
 ] as const;
 
+// ✅ Shared facilities list with coordinates
+const FACILITIES = [
+  {
+    id: "VVLT",
+    name: "Long Thanh",
+    code: "LTN",
+    coords: [107.04036041678714, 10.773641336829593],
+  },
+  {
+    id: "VVTS",
+    name: "Tan Son Nhat",
+    code: "SGN",
+    coords: [106.65638055031799, 10.817694586314753],
+  },
+] as const;
+
 export function DashboardToggle() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Zustand (Client UI State)
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const toggleDashboard = useAirportStore((state) => state.toggleDashboard);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
   const clearSelection = useAirportStore((state) => state.clearSelection);
   const alertCount = useAirportStore((state) => state.metrics.alertCount);
-  const syncSimulationStatus = useAirportStore(
-    (state) => state.syncSimulationStatus,
-  );
   const simulationMode = useAirportStore((state) => state.simulationMode);
   const setSimulationMode = useAirportStore((state) => state.setSimulationMode);
 
+  const activeAirport = useAirportStore((state) => state.activeAirport);
+  const setActiveAirport = useAirportStore((state) => state.setActiveAirport);
+
+  // Local UI State
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // --- ✅ MASTER URL SYNC & NAVIGATION GUARD ---
   useEffect(() => {
-    syncSimulationStatus();
-  }, [syncSimulationStatus]);
+    const urlAirport = searchParams.get("airport");
 
+    if (!urlAirport) {
+      // 1. Force default to VVLT if the URL is naked ("/")
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("airport", "VVLT");
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    } else {
+      // 2. If the URL has an airport, ensure our global store AND 3D map match it
+      const targetFacility = FACILITIES.find((f) => f.id === urlAirport);
+
+      // Only execute the fly-to and state update if the store is currently out of sync with the URL
+      if (targetFacility && urlAirport !== activeAirport) {
+        setActiveAirport(urlAirport);
+        clearSelection();
+
+        // Slight timeout ensures the ArcGIS map listener is fully mounted on hard-refreshes
+        setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent("switch-airport", {
+              detail: {
+                facilityId: targetFacility.id,
+                coords: targetFacility.coords,
+              },
+            }),
+          );
+        }, 150);
+      }
+    }
+  }, [
+    searchParams,
+    activeAirport,
+    pathname,
+    router,
+    setActiveAirport,
+    clearSelection,
+  ]);
+
+  // Determine current facility for the button label
+  const activeFacility =
+    FACILITIES.find((f) => f.id === activeAirport) || FACILITIES[0];
+
+  // --- TANSTACK QUERY: Background Polling for Sim Status ---
+  useQuery({
+    queryKey: ["simulationStatus"],
+    queryFn: fetchSimulationStatus,
+    refetchInterval: 10000,
+    staleTime: 5000,
+  });
+
+  // --- TANSTACK MUTATIONS ---
+  const scenarioMutation = useMutation({
+    mutationFn: (scenario: Scenario | "NONE") =>
+      startScenario(scenario as Scenario),
+    onMutate: (scenario) => {
+      setSimulationMode(scenario === "NONE" ? "GENERAL" : scenario);
+      setIsMenuOpen(false);
+      return { isClearing: scenario === "NONE" };
+    },
+    onSuccess: (data, variables, context) => {
+      toast.success(
+        context.isClearing ? "Normal Operations Restored" : "Scenario Active!",
+      );
+    },
+    onError: () => {
+      toast.error("Scenario injection failed. Engine desync.");
+      setSimulationMode("GENERAL");
+    },
+  });
+
+  const rebootMutation = useMutation({
+    mutationFn: rebootSimulation,
+    onMutate: () => {
+      setSimulationMode("GENERAL");
+      setIsMenuOpen(false);
+    },
+    onSuccess: () => toast.success("Engine Rebooted Successfully"),
+    onError: () => toast.error("Reboot failed"),
+  });
+
+  // Click Outside Handler
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -56,39 +163,6 @@ export function DashboardToggle() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleFireScenario = async (scenario: Scenario | "NONE") => {
-    const isClearing = scenario === "NONE";
-    const tId = toast.loading(
-      isClearing
-        ? "Restoring normal operations..."
-        : `Injecting ${formatScenarioName(scenario)}...`,
-    );
-
-    try {
-      await startScenario(scenario as Scenario);
-      setSimulationMode(isClearing ? "GENERAL" : scenario);
-      setIsMenuOpen(false);
-      toast.success(
-        isClearing ? "Normal Operations Restored" : "Scenario Active!",
-        { id: tId },
-      );
-    } catch (_e) {
-      toast.error("Scenario injection failed", { id: tId });
-    }
-  };
-
-  const handleHardReset = async () => {
-    const tId = toast.loading("Rebooting engine...");
-    try {
-      await rebootSimulation();
-      setSimulationMode("GENERAL");
-      setIsMenuOpen(false);
-      toast.success("Engine Rebooted", { id: tId });
-    } catch (e) {
-      toast.error("Reboot failed", { id: tId });
-    }
-  };
-
   const formatScenarioName = (name: string) =>
     name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -96,7 +170,6 @@ export function DashboardToggle() {
     simulationMode === "NONE" || simulationMode === "GENERAL";
   const isScenarioActive = !isNormalOperations;
 
-  // DESIGN DECISION: If entity is selected, render minimalist 'Close Focus' only.
   if (selectedEntityId) {
     return (
       <motion.div
@@ -107,8 +180,15 @@ export function DashboardToggle() {
         <button
           onClick={() => {
             clearSelection();
-            // This triggers the same map zoom-out logic as the main title button
-            window.dispatchEvent(new CustomEvent("reset-map-view"));
+            // Optional: You could also dispatch switch-airport here to return to the airport center
+            window.dispatchEvent(
+              new CustomEvent("switch-airport", {
+                detail: {
+                  facilityId: activeFacility.id,
+                  coords: activeFacility.coords,
+                },
+              }),
+            );
           }}
           className="flex items-center gap-2 bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl border border-gray-700 font-bold text-sm hover:bg-gray-800 transition-all hover:scale-105 active:scale-95"
         >
@@ -120,17 +200,26 @@ export function DashboardToggle() {
 
   return (
     <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 pointer-events-none">
+      {/* ✅ NAVIGATION BUTTON */}
       <motion.button
         whileHover={{ scale: 1.04 }}
         whileTap={{ scale: 0.96 }}
         onClick={() => {
           clearSelection();
-          window.dispatchEvent(new CustomEvent("reset-map-view"));
+          // Dispatch specific coords instead of generic reset
+          window.dispatchEvent(
+            new CustomEvent("switch-airport", {
+              detail: {
+                facilityId: activeFacility.id,
+                coords: activeFacility.coords,
+              },
+            }),
+          );
         }}
         className="pointer-events-auto bg-white/90 backdrop-blur-md border border-gray-200 text-gray-500 hover:text-gray-800 text-xs font-bold px-4 py-2 rounded-full shadow-sm flex items-center gap-2 transition-colors"
       >
         <Plane size={14} className="text-[#1e3a8a]" />
-        Long Thanh · Digital Twin
+        {activeFacility.name} · Digital Twin
       </motion.button>
 
       <div className="flex items-center gap-3 pointer-events-none">
@@ -179,8 +268,9 @@ export function DashboardToggle() {
           <div className="flex bg-gray-100/80 p-1 rounded-full border border-gray-200/60 shadow-inner shrink-0">
             <button
               onClick={() => {
-                if (isScenarioActive) handleFireScenario("NONE");
+                if (isScenarioActive) scenarioMutation.mutate("NONE");
               }}
+              disabled={scenarioMutation.isPending}
               className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${isNormalOperations ? "bg-green-500 shadow-sm text-white" : "text-gray-500 hover:text-gray-800"}`}
             >
               <Play
@@ -227,7 +317,7 @@ export function DashboardToggle() {
                     <div className="p-1.5 flex flex-col gap-1">
                       {isScenarioActive && (
                         <button
-                          onClick={() => handleFireScenario("NONE")}
+                          onClick={() => scenarioMutation.mutate("NONE")}
                           className="text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex justify-between items-center bg-green-50 text-green-700 hover:bg-green-100 mb-1 border border-green-200/50"
                         >
                           <span className="flex items-center gap-2">
@@ -241,10 +331,8 @@ export function DashboardToggle() {
                         return (
                           <button
                             key={scenario}
-                            onClick={() =>
-                              handleFireScenario(scenario as Scenario)
-                            }
-                            disabled={isActive}
+                            onClick={() => scenarioMutation.mutate(scenario)}
+                            disabled={isActive || scenarioMutation.isPending}
                             className={`text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex justify-between items-center ${isActive ? "bg-amber-500 text-white shadow-sm cursor-not-allowed" : "text-gray-700 hover:bg-amber-50 hover:text-amber-700"}`}
                           >
                             {formatScenarioName(scenario)}
@@ -258,11 +346,15 @@ export function DashboardToggle() {
                       <div className="h-[1px] bg-gray-200/60 w-full my-1" />
 
                       <button
-                        onClick={handleHardReset}
+                        onClick={() => rebootMutation.mutate()}
+                        disabled={rebootMutation.isPending}
                         className="text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex justify-between items-center bg-red-50 text-red-700 hover:bg-red-100 border border-red-200/50"
                       >
                         <span className="flex items-center gap-2">
-                          <StopCircle size={12} /> Hard Reset Engine
+                          <StopCircle size={12} />{" "}
+                          {rebootMutation.isPending
+                            ? "Rebooting..."
+                            : "Hard Reset Engine"}
                         </span>
                       </button>
                     </div>

@@ -8,6 +8,7 @@ import { PlaneFocusPanel } from "@/src/components/panels/PlaneFocusPanel";
 import { SensorFocusPanel } from "@/src/components/panels/SensorFocusPanel-v2";
 import { DashboardToggle } from "@/src/components/DashboardToggle";
 import { TopBar } from "@/src/components/TopBar";
+import { VehicleFocusPanel } from "@/src/components/panels/VehicleFocusPanel";
 
 // 1. Delegate the loading state directly to the dynamic map import
 const ArcGISMap = dynamic(
@@ -27,8 +28,6 @@ export default function HomePage() {
     (state) => state.selectedEntityType,
   );
 
-  // 2. The `mounted` state and `useEffect` are completely removed!
-
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#F7F7F8] cursor-none">
       {/* Base Layer - Now handles its own loading state seamlessly */}
@@ -43,6 +42,7 @@ export default function HomePage() {
       {selectedEntityType === "plane" && <PlaneFocusPanel />}
       {selectedEntityType === "sensor" && <SensorFocusPanel />}
 
+      {selectedEntityType === "vehicle" && <VehicleFocusPanel />}
       {/* Core Controllers */}
       <DashboardToggle />
     </main>

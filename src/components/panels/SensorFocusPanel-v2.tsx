@@ -10,6 +10,10 @@ import {
 import { BentoPanel } from "./BentoPanel";
 import { useAirportStore } from "@/src/store/airport-store";
 import {
+  LONG_THANH_COORDS,
+  TAN_SON_NHAT_COORDS,
+} from "@/constants/airport-coordinate";
+import {
   MapPin,
   X,
   Image as ImageIcon,
@@ -32,9 +36,8 @@ import {
   LineChart as ChartIcon,
   Table,
   Clock,
-  Layers,
-  Droplets,
   AlertTriangle,
+  Droplets,
 } from "lucide-react";
 import {
   Area,
@@ -58,6 +61,8 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { Badge } from "@/components/ui/badge";
+import { useQueryClient } from "@tanstack/react-query";
+import { SensorLogPayload } from "../dashboard/AirportDashboard";
 
 export interface ComponentTheme {
   hex: string;
@@ -291,55 +296,52 @@ const HardwareReceiptCard = ({
 const SpatialHeatmapCard = ({
   focusedSensor,
   allSensors,
+  activeAirport,
+  isDomestic,
 }: {
   focusedSensor: SensorData;
   allSensors: SensorData[];
+  activeAirport: string;
+  isDomestic: boolean;
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const heatmapInstanceRef = useRef<HeatmapInstance | null>(null);
 
   const [isReady, setIsReady] = useState(false);
-  const setImmersiveActive = useAirportStore((s) => s.setImmersiveActive);
 
   const type = focusedSensor.type;
   const isTarmac = type === "TARMAC_TEMP" || type === "WIND_OUTDOOR";
   const isIndoor = !isTarmac;
 
-  const BLUEPRINT_TERMINAL = useMemo(
-    () => [
-      { lat: 10.773008718159797, lng: 107.04086105423717 },
-      { lat: 10.774047198116524, lng: 107.04275931075628 },
-      { lat: 10.77463901841647, lng: 107.04257744187701 },
-      { lat: 10.778050337347418, lng: 107.04374822289273 },
-      { lat: 10.778206665272192, lng: 107.04329923409708 },
-      { lat: 10.775303419099764, lng: 107.04214550329326 },
-      { lat: 10.774733595328735, lng: 107.04002158723031 },
-      { lat: 10.777674917076357, lng: 107.03771685590925 },
-      { lat: 10.777429254734203, lng: 107.03734512504121 },
-      { lat: 10.774209067672718, lng: 107.03939978281073 },
-      { lat: 10.772529245082518, lng: 107.03829810775669 },
-      { lat: 10.77231013706672, lng: 107.03506066991201 },
-      { lat: 10.771838722376199, lng: 107.03505391116936 },
-      { lat: 10.771958236029533, lng: 107.03878473711923 },
-      { lat: 10.77153329837997, lng: 107.0392646078483 },
-    ],
-    [],
-  );
-
-  const BLUEPRINT_TARMAC = useMemo(
-    () => [
-      { lat: 10.802400383552415, lng: 107.06490466155752 },
-      { lat: 10.800358431900554, lng: 107.06668061126459 },
-      { lat: 10.770569539611992, lng: 107.02693198473341 },
-      { lat: 10.773454446867156, lng: 107.02503613419944 },
-    ],
-    [],
-  );
-
   const layout = useMemo(() => {
-    const activePoints = isTarmac ? BLUEPRINT_TARMAC : BLUEPRINT_TERMINAL;
-    const lats = activePoints.map((p) => p.lat);
-    const lngs = activePoints.map((p) => p.lng);
+    let polygonsData: { lat: number; lng: number }[][] = [];
+
+    // ✅ Read directly from the unified constants
+    if (activeAirport === "VVTS") {
+      if (isTarmac) {
+        polygonsData = [
+          TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25R_07L.area,
+          TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25L_07R.area,
+        ];
+      } else {
+        polygonsData = [
+          isDomestic
+            ? TAN_SON_NHAT_COORDS.TERMINALS.DOMESTIC.area
+            : TAN_SON_NHAT_COORDS.TERMINALS.INTERNATIONAL.area,
+        ];
+      }
+    } else {
+      // VVLT
+      polygonsData = isTarmac
+        ? [LONG_THANH_COORDS.RUNWAYS.MAIN.area]
+        : [LONG_THANH_COORDS.TERMINALS.MAIN.area];
+    }
+
+    const allPoints = polygonsData.flat();
+    if (allPoints.length === 0) return null;
+
+    const lats = allPoints.map((p) => p.lat);
+    const lngs = allPoints.map((p) => p.lng);
 
     const latSpan = Math.max(...lats) - Math.min(...lats);
     const lngSpan = Math.max(...lngs) - Math.min(...lngs);
@@ -355,24 +357,21 @@ const SpatialHeatmapCard = ({
       return { x: xPct, y: yPct };
     };
 
-    const terminalPct = BLUEPRINT_TERMINAL.map(mapToPct);
-    const tarmacPct = BLUEPRINT_TARMAC.map(mapToPct);
+    const polygonStrings = polygonsData.map((poly) => {
+      const pctPoints = poly.map(mapToPct);
+      return pctPoints
+        .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+        .join(" ");
+    });
 
     return {
-      terminalPointsStr: terminalPct
-        .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
-        .join(" "),
-      terminalClipStr: `polygon(${terminalPct.map((p) => `${p.x.toFixed(2)}% ${p.y.toFixed(2)}%`).join(", ")})`,
-      tarmacPointsStr: tarmacPct
-        .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
-        .join(" "),
-      tarmacClipStr: `polygon(${tarmacPct.map((p) => `${p.x.toFixed(2)}% ${p.y.toFixed(2)}%`).join(", ")})`,
+      polygons: polygonStrings,
       xmin,
       xmax,
       ymin,
       ymax,
     };
-  }, [BLUEPRINT_TERMINAL, BLUEPRINT_TARMAC, isTarmac]);
+  }, [isTarmac, activeAirport, isDomestic]);
 
   const getThemeGradient = (sensorType: string): Record<string, string> => {
     if (sensorType.includes("CO2") || sensorType.includes("HUMIDITY")) {
@@ -426,7 +425,7 @@ const SpatialHeatmapCard = ({
   useEffect(() => {
     let isMounted = true;
     const containerNode = containerRef.current;
-    if (!containerNode || typeof window === "undefined") return;
+    if (!containerNode || typeof window === "undefined" || !layout) return;
 
     if (heatmapInstanceRef.current) {
       containerNode.innerHTML = "";
@@ -462,13 +461,19 @@ const SpatialHeatmapCard = ({
   }, [type, layout]);
 
   useEffect(() => {
-    if (!isReady || !heatmapInstanceRef.current || !containerRef.current)
+    if (
+      !isReady ||
+      !heatmapInstanceRef.current ||
+      !containerRef.current ||
+      !layout
+    )
       return;
 
     let animationFrameId: number;
 
     const drawHeatmap = () => {
-      if (!heatmapInstanceRef.current || !containerRef.current) return;
+      if (!heatmapInstanceRef.current || !containerRef.current || !layout)
+        return;
 
       const relevantSensors = allSensors.filter(
         (s) =>
@@ -526,13 +531,12 @@ const SpatialHeatmapCard = ({
     };
   }, [allSensors, type, layout, isReady, focusedSensor.id]);
 
-  const activeClipPath = isIndoor
-    ? layout.terminalClipStr
-    : layout.tarmacClipStr;
+  if (!layout) return null;
 
   const hasValidCoords =
     focusedSensor.position.longitude !== 0 &&
     focusedSensor.position.latitude !== 0;
+
   const focusedXPct = hasValidCoords
     ? ((focusedSensor.position.longitude - layout.xmin) /
         (layout.xmax - layout.xmin)) *
@@ -544,6 +548,8 @@ const SpatialHeatmapCard = ({
         (layout.ymax - layout.ymin)) *
         100
     : -10;
+
+  const clipPathId = `heatmap-clip-${focusedSensor.id}`;
 
   return (
     <div className="flex flex-col gap-1 w-full pt-2">
@@ -557,9 +563,29 @@ const SpatialHeatmapCard = ({
       </div>
 
       <div className="relative w-[calc(100%-2rem)] mx-auto h-64 border border-gray-200 rounded-lg overflow-hidden bg-[#f8fafc]">
+        {/* NATIVE SVG MULTI-POLYGON CLIP PATH DEFINITION */}
+        <svg width="0" height="0" className="absolute pointer-events-none">
+          <defs>
+            <clipPath id={clipPathId} clipPathUnits="objectBoundingBox">
+              {layout.polygons.map((pts, i) => (
+                <polygon
+                  key={i}
+                  points={pts
+                    .split(" ")
+                    .map((p) => {
+                      const [x, y] = p.split(",");
+                      return `${parseFloat(x) / 100},${parseFloat(y) / 100}`;
+                    })
+                    .join(" ")}
+                />
+              ))}
+            </clipPath>
+          </defs>
+        </svg>
+
         <div
           className="absolute inset-0 z-10 mix-blend-multiply transition-all duration-700"
-          style={{ clipPath: activeClipPath }}
+          style={{ clipPath: `url(#${clipPathId})` }}
         >
           <div ref={containerRef} className="w-full h-full" />
         </div>
@@ -569,48 +595,27 @@ const SpatialHeatmapCard = ({
           preserveAspectRatio="none"
           viewBox="0 0 100 100"
         >
-          {!isTarmac && (
-            <>
-              <polygon
-                points={layout.terminalPointsStr}
-                fill="transparent"
-                stroke="#64748b"
-                strokeWidth="0.4"
-                strokeDasharray="1 1.5"
-              />
-              <text
-                x="50"
-                y="50"
-                fontSize="3.5"
-                fill="#475569"
-                textAnchor="middle"
-                className="font-mono uppercase font-bold tracking-widest"
-              >
-                Terminal Footprint
-              </text>
-            </>
-          )}
-          {isTarmac && (
-            <>
-              <polygon
-                points={layout.tarmacPointsStr}
-                fill="transparent"
-                stroke="#64748b"
-                strokeWidth="0.4"
-                strokeDasharray="2 2"
-              />
-              <text
-                x="50"
-                y="50"
-                fontSize="3.5"
-                fill="#475569"
-                textAnchor="middle"
-                className="font-mono uppercase font-bold tracking-widest"
-              >
-                Tarmac Corridor
-              </text>
-            </>
-          )}
+          {layout.polygons.map((pts, i) => (
+            <polygon
+              key={i}
+              points={pts}
+              fill="transparent"
+              stroke="#64748b"
+              strokeWidth="0.4"
+              strokeDasharray={isTarmac ? "2 2" : "1 1.5"}
+            />
+          ))}
+
+          <text
+            x="50"
+            y="50"
+            fontSize="3.5"
+            fill="#475569"
+            textAnchor="middle"
+            className="font-mono uppercase font-bold tracking-widest"
+          >
+            {isTarmac ? "Tarmac Corridor" : "Terminal Footprint"}
+          </text>
 
           {hasValidCoords && (
             <g>
@@ -645,70 +650,63 @@ export function SensorFocusPanel() {
     "analysis",
   );
 
+  // PURE CLOCK STATE
+  const [currentTime, setCurrentTime] = useState<number>(0);
+
+  // ZUSTAND
   const isDashboardOpen = useAirportStore((state) => state.isDashboardOpen);
   const selectEntity = useAirportStore((state) => state.selectEntity);
   const clearSelection = useAirportStore((state) => state.clearSelection);
   const sensor = useAirportStore((state) => state.getSelectedSensor());
-
-  // ✅ Direct selector: This is the only "history" you need
-  const sensorHistory = useAirportStore(
-    (state) => state.historicalData[sensor?.id || ""] || EMPTY_ARRAY,
-  );
-  const syncSensorHistory = useAirportStore((state) => state.syncSensorHistory);
-
   const isImmersiveActive = useAirportStore((state) => state.isImmersiveActive);
   const setImmersiveActive = useAirportStore(
     (state) => state.setImmersiveActive,
   );
+  const sensors = useAirportStore((state) => state.sensors);
+  const forecasts = useAirportStore((state) => state.aiForecasts);
 
-  const [throttledHeavy, setThrottledHeavy] = useState(() => {
-    const state = useAirportStore.getState();
-    return {
-      history: state.historicalData,
-      forecasts: state.aiForecasts,
-      sensors: state.sensors,
-      lastUpdated: Date.now(),
-    };
-  });
+  // ✅ Active Airport state mapped for UI
+  const activeAirport =
+    useAirportStore((state) => state.activeAirport) || "VVLT";
 
+  const queryClient = useQueryClient();
+
+  // CLOCK EFFECT
   useEffect(() => {
     if (!isDashboardOpen) return;
-    const syncData = () => {
-      const state = useAirportStore.getState();
-      setThrottledHeavy({
-        history: state.historicalData,
-        forecasts: state.aiForecasts,
-        sensors: state.sensors,
-        lastUpdated: Date.now(),
-      });
+
+    const initTimer = setTimeout(() => setCurrentTime(Date.now()), 0);
+    const interval = setInterval(() => setCurrentTime(Date.now()), 60000);
+
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(interval);
     };
+  }, [isDashboardOpen]);
 
-    syncData();
-    const interval = setInterval(syncData, 300000);
-    return () => clearInterval(interval);
-  }, [isDashboardOpen, sensor?.id]);
+  // HISTORICAL DATA RESOLVER
+  const sensorHistory = useMemo(() => {
+    if (!sensor) return EMPTY_ARRAY;
 
-  const history = (sensor && throttledHeavy.history[sensor.id]) || EMPTY_ARRAY;
-  const storeForecast = sensor
-    ? throttledHeavy.forecasts[sensor.id]
-    : undefined;
-  const throttledSensors = throttledHeavy.sensors as SensorData[];
+    const specificHistory = queryClient.getQueryData<
+      { timestamp: string; value: number }[]
+    >(["sensorHistory", sensor.id]);
+    if (specificHistory && specificHistory.length > 0) return specificHistory;
 
-  const [currentTime] = useState(() => Date.now());
+    const bulkLogs =
+      queryClient.getQueryData<SensorLogPayload[]>([
+        "allSensorLogs",
+        activeAirport,
+      ]) || [];
+    return bulkLogs
+      .filter((log) => log.sensorId === sensor.id)
+      .sort(
+        (a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+  }, [sensor, queryClient, currentTime, activeAirport]);
 
-  useEffect(() => {
-    if (!sensor?.id) return;
-
-    // Initial sync
-    syncSensorHistory(sensor.id);
-
-    // Refresh every 1 min
-    const interval = setInterval(() => {
-      syncSensorHistory(sensor.id);
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [sensor?.id, syncSensorHistory]);
+  const storeForecast = sensor ? forecasts[sensor.id] : undefined;
 
   const nowMs = useMemo(() => {
     if (sensorHistory.length > 0) {
@@ -721,14 +719,12 @@ export function SensorFocusPanel() {
     return currentTime;
   }, [sensorHistory, currentTime]);
 
-  const totalSensors = useAirportStore((state) => state.sensors.length);
+  const totalSensors = sensors.length;
   const sensorId = sensor?.id;
 
   const currentIndex = useMemo(() => {
-    return sensorId
-      ? useAirportStore.getState().sensors.findIndex((s) => s.id === sensorId)
-      : -1;
-  }, [sensorId]);
+    return sensorId ? sensors.findIndex((s) => s.id === sensorId) : -1;
+  }, [sensorId, sensors]);
 
   // --- Strict Environmental Categorization ---
   const typeStr = String(sensor?.type || "UNKNOWN").toUpperCase();
@@ -758,8 +754,12 @@ export function SensorFocusPanel() {
       ? sensor.zone
       : sensor?.zone?.name || "Unknown Zone";
   const unit = sensor?.unit || "";
-
   const currentVal = sensor?.currentValue || 0;
+
+  // ✅ Identify Domestic vs International Zone safely
+  const isDomestic =
+    zoneName.toLowerCase().includes("domestic") ||
+    zoneName.toLowerCase().includes("t1");
 
   const forecast = useMemo(() => {
     if (storeForecast && storeForecast.predictions?.length > 0)
@@ -777,105 +777,112 @@ export function SensorFocusPanel() {
   }, [storeForecast, currentVal]);
 
   const { chartData, nowLabel } = useMemo(() => {
+    const data: ChartDataPoint[] = [];
     let nowLabelStr = "";
-    const DATA_POINTS = 20;
-    let baseData: ChartDataPoint[] = [];
 
-    for (let i = 0; i < DATA_POINTS; i++) {
-      const histIndex =
-        history.length > 0
-          ? Math.floor((i / DATA_POINTS) * history.length)
-          : -1;
-      const h = history[histIndex] || history[history.length - 1];
+    if (currentTime !== 0) {
+      const DATA_POINTS = 20;
 
-      const t = new Date(nowMs - (DATA_POINTS - 1 - i) * 60000);
-      const time = t.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
+      for (let i = 0; i < DATA_POINTS; i++) {
+        const histIndex =
+          sensorHistory.length > 0
+            ? Math.floor((i / DATA_POINTS) * sensorHistory.length)
+            : -1;
+        const h =
+          sensorHistory[histIndex] || sensorHistory[sensorHistory.length - 1];
 
-      const val = h ? h.value : currentVal;
-      const noise = Math.sin(i) * 2;
+        const t = new Date(nowMs - (DATA_POINTS - 1 - i) * 60000);
+        const time = t.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
 
-      baseData.push({
-        time,
-        realValue: val,
-        value: val,
-        gust: val * 1.4,
-        indoorTemp: isIndoorTemp ? val : 22 + noise,
-        tarmacTemp: isTarmacTemp ? val : 35 + noise,
-        crowdDensity: isCrowd ? val : Math.floor(200 + noise * 50),
-        co2Level: isCO2 ? val : 420 + noise * 5,
-        humidity: isHumidity ? val : 50 + noise * 3,
-        windOutdoor: isOutdoorWind ? val : 10 + noise,
-        windIndoor: isIndoorWind ? val : 2 + noise,
-        structTilt: isTilt ? val : 0.01 + Math.abs(noise) * 0.005,
-        lightDensity: isLight ? val : 800 + noise * 100,
-      });
-    }
+        const val = h ? h.value : currentVal;
+        const noise = Math.sin(i) * 2;
 
-    if (forecast && forecast.predictions?.length > 0) {
-      const lastRealPoint = baseData[baseData.length - 1];
-      if (lastRealPoint) {
-        nowLabelStr = lastRealPoint.time;
-        lastRealPoint.predictedValue = lastRealPoint.realValue;
-        lastRealPoint.predictedIndoorTemp = lastRealPoint.indoorTemp;
-        lastRealPoint.predictedTarmacTemp = lastRealPoint.tarmacTemp;
-        lastRealPoint.predictedCrowdDensity = lastRealPoint.crowdDensity;
-        lastRealPoint.predictedCo2Level = lastRealPoint.co2Level;
-        lastRealPoint.predictedHumidity = lastRealPoint.humidity;
-        lastRealPoint.predictedWindOutdoor = lastRealPoint.windOutdoor;
-        lastRealPoint.predictedWindIndoor = lastRealPoint.windIndoor;
-        lastRealPoint.predictedStructTilt = lastRealPoint.structTilt;
-        lastRealPoint.predictedLightDensity = lastRealPoint.lightDensity;
-        lastRealPoint.confRange = [
-          lastRealPoint.realValue ?? 0,
-          lastRealPoint.realValue ?? 0,
-        ];
+        data.push({
+          time,
+          realValue: val,
+          value: val,
+          gust: val * 1.4,
+          indoorTemp: isIndoorTemp ? val : 22 + noise,
+          tarmacTemp: isTarmacTemp ? val : 35 + noise,
+          crowdDensity: isCrowd ? val : Math.floor(200 + noise * 50),
+          co2Level: isCO2 ? val : 420 + noise * 5,
+          humidity: isHumidity ? val : 50 + noise * 3,
+          windOutdoor: isOutdoorWind ? val : 10 + noise,
+          windIndoor: isIndoorWind ? val : 2 + noise,
+          structTilt: isTilt ? val : 0.01 + Math.abs(noise) * 0.005,
+          lightDensity: isLight ? val : 800 + noise * 100,
+        });
       }
 
-      const predictedData = forecast.predictions.map((p, i) => {
-        const errorMargin = 1 - (p.confidenceScore || 0);
-        const offset = Math.max(
-          (p.predictedValue || 0) * errorMargin,
-          isTilt ? 0.005 : 2,
-        );
-        const pVal = p.predictedValue;
-        const noise = Math.sin(baseData.length + i) * 2;
+      if (forecast && forecast.predictions?.length > 0) {
+        const lastRealPoint = data[data.length - 1];
+        if (lastRealPoint) {
+          nowLabelStr = lastRealPoint.time;
+          lastRealPoint.predictedValue = lastRealPoint.realValue;
+          lastRealPoint.predictedIndoorTemp = lastRealPoint.indoorTemp;
+          lastRealPoint.predictedTarmacTemp = lastRealPoint.tarmacTemp;
+          lastRealPoint.predictedCrowdDensity = lastRealPoint.crowdDensity;
+          lastRealPoint.predictedCo2Level = lastRealPoint.co2Level;
+          lastRealPoint.predictedHumidity = lastRealPoint.humidity;
+          lastRealPoint.predictedWindOutdoor = lastRealPoint.windOutdoor;
+          lastRealPoint.predictedWindIndoor = lastRealPoint.windIndoor;
+          lastRealPoint.predictedStructTilt = lastRealPoint.structTilt;
+          lastRealPoint.predictedLightDensity = lastRealPoint.lightDensity;
+          lastRealPoint.confRange = [
+            lastRealPoint.realValue ?? 0,
+            lastRealPoint.realValue ?? 0,
+          ];
+        }
 
-        return {
-          time: p.horizonLabel,
-          predictedValue: pVal,
-          confRange: [
-            Math.max(0, (pVal ?? 0) - offset),
-            (pVal ?? 0) + offset,
-          ] as [number, number],
-          isPrediction: true,
-          predictedIndoorTemp: isIndoorTemp ? pVal : 22 + noise,
-          predictedTarmacTemp: isTarmacTemp ? pVal : 35 + noise,
-          predictedCrowdDensity: isCrowd ? pVal : Math.floor(200 + noise * 50),
-          predictedCo2Level: isCO2 ? pVal : 420 + noise * 5,
-          predictedHumidity: isHumidity
-            ? pVal
-            : 50 + noise * 3 + Math.sin(i) * 2,
-          predictedWindOutdoor: isOutdoorWind ? pVal : 10 + noise,
-          predictedWindIndoor: isIndoorWind ? pVal : 2 + noise,
-          predictedStructTilt: isTilt ? pVal : 0.01 + Math.abs(noise) * 0.005,
-          predictedLightDensity: isLight ? pVal : 800 + noise * 100,
-        };
-      });
-      baseData = [...baseData, ...predictedData];
+        const predictedData = forecast.predictions.map((p, i) => {
+          const errorMargin = 1 - (p.confidenceScore || 0);
+          const offset = Math.max(
+            (p.predictedValue || 0) * errorMargin,
+            isTilt ? 0.005 : 2,
+          );
+          const pVal = p.predictedValue;
+          const noise = Math.sin(data.length + i) * 2;
+
+          return {
+            time: p.horizonLabel,
+            predictedValue: pVal,
+            confRange: [
+              Math.max(0, (pVal ?? 0) - offset),
+              (pVal ?? 0) + offset,
+            ] as [number, number],
+            isPrediction: true,
+            predictedIndoorTemp: isIndoorTemp ? pVal : 22 + noise,
+            predictedTarmacTemp: isTarmacTemp ? pVal : 35 + noise,
+            predictedCrowdDensity: isCrowd
+              ? pVal
+              : Math.floor(200 + noise * 50),
+            predictedCo2Level: isCO2 ? pVal : 420 + noise * 5,
+            predictedHumidity: isHumidity
+              ? pVal
+              : 50 + noise * 3 + Math.sin(i) * 2,
+            predictedWindOutdoor: isOutdoorWind ? pVal : 10 + noise,
+            predictedWindIndoor: isIndoorWind ? pVal : 2 + noise,
+            predictedStructTilt: isTilt ? pVal : 0.01 + Math.abs(noise) * 0.005,
+            predictedLightDensity: isLight ? pVal : 800 + noise * 100,
+          };
+        });
+        data.push(...predictedData);
+      }
     }
 
-    return { chartData: baseData, nowLabel: nowLabelStr };
-  }, [history, forecast, typeStr, currentVal, nowMs]);
+    return { chartData: data, nowLabel: nowLabelStr };
+  }, [sensorHistory, forecast, typeStr, currentVal, nowMs, currentTime]);
 
   const windRadarData = useMemo(() => {
     const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
     return directions.map((dir, i) => {
       const histVal =
-        chartData[i % Math.max(1, history.length)]?.realValue || currentVal;
+        chartData[i % Math.max(1, sensorHistory.length)]?.realValue ||
+        currentVal;
       const predVal = forecast?.predictions?.length
         ? forecast.predictions[i % Math.max(1, forecast.predictions.length)]
             ?.predictedValue
@@ -886,31 +893,14 @@ export function SensorFocusPanel() {
         predictedSpeed: (predVal ?? 0) * (1 + Math.cos(i) * 0.2),
       };
     });
-  }, [chartData, currentVal, history.length, forecast]);
+  }, [chartData, currentVal, sensorHistory.length, forecast]);
 
-  const dualWindRadarData = useMemo(() => {
-    const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    return directions.map((dir, i) => {
-      const outVal =
-        chartData[i % Math.max(1, chartData.length)]?.windOutdoor || 10;
-      const inVal =
-        chartData[i % Math.max(1, chartData.length)]?.windIndoor || 2;
-      return {
-        direction: dir,
-        outdoor: outVal * (1 + Math.sin(i) * 0.2),
-        indoor: inVal * (1 + Math.cos(i) * 0.2),
-      };
-    });
-  }, [chartData]);
-
-  // Compute Telemetry Log Table Data based on the last 6 hours
   const tableData = useMemo(() => {
-    if (!sensorHistory || sensorHistory.length === 0) return [];
+    if (!sensorHistory || sensorHistory.length === 0 || currentTime === 0)
+      return [];
 
     const sixHoursAgo = nowMs - 6 * 60 * 60 * 1000;
 
-    // Filter, then Map.
-    // We don't need to mutate the original array, just create the display format.
     return sensorHistory
       .filter((h) => {
         const t = new Date(h.timestamp).getTime();
@@ -930,7 +920,7 @@ export function SensorFocusPanel() {
         }),
         value: h.value,
       }));
-  }, [sensorHistory, nowMs]);
+  }, [sensorHistory, nowMs, currentTime]);
 
   const aiRecommendations = useMemo(() => {
     const recs = [];
@@ -1112,14 +1102,12 @@ export function SensorFocusPanel() {
   }
 
   const handlePrev = () => {
-    const sensors = useAirportStore.getState().sensors;
     selectEntity(
       sensors[currentIndex <= 0 ? totalSensors - 1 : currentIndex - 1].id,
       "sensor",
     );
   };
   const handleNext = () => {
-    const sensors = useAirportStore.getState().sensors;
     selectEntity(
       sensors[currentIndex >= totalSensors - 1 ? 0 : currentIndex + 1].id,
       "sensor",
@@ -1150,7 +1138,6 @@ export function SensorFocusPanel() {
       <BentoPanel
         direction="left"
         isOpen={true}
-        // 2. Updated className for dynamic width and transition
         className={`absolute top-20 left-6 z-30 flex flex-col gap-2 h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar pb-4 pr-2 pointer-events-auto transition-all duration-300 ease-in-out ${
           isLeftCollapsed ? "w-[48px]" : "w-[380px]"
         }`}
@@ -1199,7 +1186,6 @@ export function SensorFocusPanel() {
           )}
         </div>
 
-        {/* 3. Wrap content in an opacity transition so it fades out when collapsed */}
         <div
           className={`transition-opacity duration-300 ${isLeftCollapsed ? "opacity-0 pointer-events-none" : "opacity-100"}`}
         >
@@ -1207,7 +1193,7 @@ export function SensorFocusPanel() {
             title="Hardware Identity"
             vendorId={vendorId}
             icon={Fingerprint}
-            footerText="NETWORK: IOT-VLAN-4"
+            footerText={`NETWORK: IOT-VLAN-${activeAirport === "VVTS" ? "2" : "4"}`}
             theme={theme}
           >
             <div className="flex justify-between items-center pb-2">
@@ -1354,8 +1340,6 @@ export function SensorFocusPanel() {
               </div>
             </div>
           </HardwareReceiptCard>
-
-          {/* ... Add the rest of your HardwareReceiptCard components here ... */}
         </div>
       </BentoPanel>
 
@@ -1664,49 +1648,6 @@ export function SensorFocusPanel() {
         </HardwareReceiptCard>
 
         <HardwareReceiptCard
-          title="Hardware Diagnostics"
-          vendorId={vendorId}
-          icon={Settings}
-          footerText="UPTIME: 99.9%"
-          theme={theme}
-        >
-          <div className="flex flex-col space-y-3 pt-2">
-            <div className="flex justify-between items-end border-b border-dotted border-gray-300 pb-1.5">
-              <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                Battery Level
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                85%
-              </span>
-            </div>
-            <div className="flex justify-between items-end border-b border-dotted border-gray-300 pb-1.5">
-              <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                Signal (dBm)
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                -45
-              </span>
-            </div>
-            <div className="flex justify-between items-end border-b border-dotted border-gray-300 pb-1.5">
-              <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                Core Temp
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                42°C
-              </span>
-            </div>
-            <div className="flex justify-between items-end border-b border-dotted border-gray-300 pb-1.5">
-              <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                Memory Load
-              </span>
-              <span className="text-xs font-bold font-mono text-gray-800">
-                67%
-              </span>
-            </div>
-          </div>
-        </HardwareReceiptCard>
-
-        <HardwareReceiptCard
           title="Network Profile"
           vendorId={vendorId}
           icon={Server}
@@ -1719,8 +1660,8 @@ export function SensorFocusPanel() {
                 MQTT Topic Route
               </span>
               <span className="text-[10px] font-bold font-mono text-gray-800 break-all leading-tight block">
-                /v1/sgn/{typeStr.toLowerCase().split("_")[0]}/
-                {sensor.id.split("-")[0]}
+                /v1/{activeAirport.toLowerCase()}/
+                {typeStr.toLowerCase().split("_")[0]}/{sensor.id.split("-")[0]}
               </span>
             </div>
             <div className="flex justify-between items-end border-t border-dashed border-gray-300 pt-3">
@@ -2744,64 +2685,6 @@ export function SensorFocusPanel() {
                     </div>
                   )}
 
-                  {isWind && (
-                    <div className="flex flex-col gap-1 border-t border-dashed border-gray-200 pt-4">
-                      <div className="flex justify-between items-center ml-8 mb-2 pr-4">
-                        <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">
-                          Wind Velocity Delta: Indoor Draft vs Outdoor Shear
-                        </span>
-                        <SyncBadge />
-                      </div>
-                      <ChartContainer
-                        config={configMap}
-                        className="h-64 w-full mt-2"
-                      >
-                        <RadarChart
-                          cx="50%"
-                          cy="50%"
-                          outerRadius="70%"
-                          data={dualWindRadarData}
-                        >
-                          <PolarGrid stroke="#cbd5e1" />
-                          <PolarAngleAxis
-                            dataKey="direction"
-                            tick={{
-                              fontSize: 10,
-                              fill: "#64748b",
-                              fontWeight: "bold",
-                            }}
-                          />
-                          <PolarRadiusAxis
-                            angle={90}
-                            domain={[0, "dataMax + 2"]}
-                            tick={false}
-                            axisLine={false}
-                          />
-
-                          <Radar
-                            name="Outdoor Matrix"
-                            dataKey="outdoor"
-                            stroke="var(--color-windOutdoor)"
-                            strokeWidth={2}
-                            fill="var(--color-windOutdoor)"
-                            fillOpacity={0.3}
-                            isAnimationActive={false}
-                          />
-                          <Radar
-                            name="Indoor Matrix"
-                            dataKey="indoor"
-                            stroke="var(--color-windIndoor)"
-                            strokeWidth={2}
-                            fill="var(--color-windIndoor)"
-                            fillOpacity={0.5}
-                            isAnimationActive={false}
-                          />
-                          <ChartTooltip content={<ChartTooltipContent />} />
-                        </RadarChart>
-                      </ChartContainer>
-                    </div>
-                  )}
-
                   {/* ========================================================
                       FALLBACKS / SPATIAL MAPPING
                   ======================================================== */}
@@ -2913,7 +2796,9 @@ export function SensorFocusPanel() {
                   {!isTilt && (
                     <SpatialHeatmapCard
                       focusedSensor={sensor as SensorData}
-                      allSensors={throttledSensors}
+                      allSensors={sensors as SensorData[]}
+                      activeAirport={activeAirport}
+                      isDomestic={isDomestic}
                     />
                   )}
                 </div>

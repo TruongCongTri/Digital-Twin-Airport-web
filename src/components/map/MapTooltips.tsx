@@ -2,10 +2,12 @@
 
 import React, { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Plane, Sensor } from "@/types";
+import type { Plane, Sensor, Vehicle } from "@/types";
 import { useAirportStore } from "@/src/store/airport-store";
 
-// ✅ MEMOIZED to prevent lag during rapid map panning
+// ==========================================
+// 1. PLANE TOOLTIP
+// ==========================================
 const PlaneTooltip = React.memo(function PlaneTooltip({
   plane,
   x,
@@ -52,14 +54,15 @@ const PlaneTooltip = React.memo(function PlaneTooltip({
             {destinationText}
           </div>
         </div>
-        {/* CSS Downward Triangle Pointer */}
         <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-white/95 drop-shadow-md" />
       </motion.div>
     </div>
   );
 });
 
-// ✅ MEMOIZED HUD that points directly down into the 3D Water Tanks
+// ==========================================
+// 2. SENSOR TOOLTIP
+// ==========================================
 const SensorTooltip = React.memo(function SensorTooltip({
   sensor,
   x,
@@ -70,7 +73,6 @@ const SensorTooltip = React.memo(function SensorTooltip({
   y: number;
 }) {
   const status = sensor.status || "UNKNOWN";
-
   const historyLen = sensor.history?.length || 0;
   const lastVal =
     historyLen > 0 ? sensor.history[historyLen - 1].value : sensor.currentValue;
@@ -118,21 +120,80 @@ const SensorTooltip = React.memo(function SensorTooltip({
             </span>
           </div>
         </div>
-
-        {/* Sleek downward pointer resting precisely on top of the 3D cylinder */}
         <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-white/95 drop-shadow-md" />
       </motion.div>
     </div>
   );
 });
 
+// ==========================================
+// 3. VEHICLE TOOLTIP
+// ==========================================
+const VehicleTooltip = React.memo(function VehicleTooltip({
+  vehicle,
+  x,
+  y,
+}: {
+  vehicle: Vehicle;
+  x: number;
+  y: number;
+}) {
+  const status = vehicle.status || "UNKNOWN";
+  const speed =
+    vehicle.speed !== undefined ? `${Math.round(vehicle.speed)} kts` : "0 kts";
+
+  return (
+    <div
+      className="absolute z-20 pointer-events-auto cursor-pointer"
+      style={{ left: x, top: y, transform: "translate(-50%, -100%)" }}
+      onClick={() =>
+        useAirportStore.getState().selectEntity(vehicle.id, "vehicle")
+      }
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ duration: 0.1 }}
+        className="flex flex-col items-center pb-2 hover:-translate-y-1 transition-transform"
+      >
+        <div className="bg-white/95 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200/80 text-left whitespace-nowrap min-w-[120px] hover:border-amber-500 transition-colors">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-1 mb-1">
+            <div className="flex items-center gap-1.5">
+              <div
+                className={`w-2 h-2 rounded-sm ${status === "EXITING" ? "bg-red-500" : "bg-amber-500"}`}
+              />
+              {/* ✅ UPDATED: Render License Plate */}
+              <span className="text-[11px] font-bold text-gray-800">
+                {vehicle.licensePlate || "Unknown"}
+              </span>
+            </div>
+          </div>
+          <div className="flex justify-between items-center mt-0.5">
+            <span className="text-[9px] font-bold text-gray-600 uppercase">
+              {status.replace(/_/g, " ")}
+            </span>
+            <span className="text-[9px] font-mono text-gray-500">{speed}</span>
+          </div>
+        </div>
+        <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-t-[8px] border-l-transparent border-r-transparent border-t-white/95 drop-shadow-md" />
+      </motion.div>
+    </div>
+  );
+});
+
+// ==========================================
+// MASTER RENDERER
+// ==========================================
 export function MapTooltips() {
   const tooltips = useAirportStore((state) => state.tooltips);
   const planes = useAirportStore((state) => state.planes);
   const sensors = useAirportStore((state) => state.sensors);
+  const EMPTY_VEHICLES: Vehicle[] = [];
+  const vehicles = useAirportStore((state) => state.vehicles ?? EMPTY_VEHICLES);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
 
-  // ✅ PERFORMANCE FIX: O(1) Lookup Maps to prevent N^2 operations during panning
+  // O(1) Lookup Maps
   const planesMap = useMemo(() => {
     return planes.reduce(
       (acc, plane) => {
@@ -153,19 +214,29 @@ export function MapTooltips() {
     );
   }, [sensors]);
 
+  const vehiclesMap = useMemo(() => {
+    return vehicles.reduce(
+      (acc, vehicle) => {
+        acc[vehicle.id] = vehicle;
+        return acc;
+      },
+      {} as Record<string, Vehicle>,
+    );
+  }, [vehicles]);
+
   return (
     <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
       <AnimatePresence>
         {tooltips
           .filter((t) => {
             if (!t.visible) return false;
-            // ✅ ISOLATION: If an entity is focused, ONLY show its tooltip
+            // ISOLATION: If an entity is focused, ONLY show its tooltip
             if (selectedEntityId) return t.entityId === selectedEntityId;
             return true;
           })
           .map((t) => {
             if (t.entityType === "plane") {
-              const plane = planesMap[t.entityId]; // Instant lookup
+              const plane = planesMap[t.entityId];
               if (!plane) return null;
               return (
                 <PlaneTooltip
@@ -175,8 +246,10 @@ export function MapTooltips() {
                   y={t.screenY}
                 />
               );
-            } else if (t.entityType === "sensor") {
-              const sensor = sensorsMap[t.entityId]; // Instant lookup
+            }
+
+            if (t.entityType === "sensor") {
+              const sensor = sensorsMap[t.entityId];
               if (!sensor) return null;
               return (
                 <SensorTooltip
@@ -187,7 +260,21 @@ export function MapTooltips() {
                 />
               );
             }
-            return null;
+
+            if (t.entityType === "vehicle") {
+              const vehicle = vehiclesMap[t.entityId];
+              if (!vehicle) return null;
+              return (
+                <VehicleTooltip
+                  key={t.entityId}
+                  vehicle={vehicle}
+                  x={t.screenX}
+                  y={t.screenY}
+                />
+              );
+            }
+
+            return null; // Fallback if type is unrecognized
           })}
       </AnimatePresence>
     </div>
