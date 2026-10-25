@@ -1,7 +1,12 @@
 import { useEffect } from "react";
 import { io } from "socket.io-client";
 import { useAirportStore } from "../store/airport-store";
-import type { Plane, Vehicle, VehicleStatus } from "@/types";
+import type {
+  AIPredictionPayload,
+  Plane,
+  Vehicle,
+  VehicleStatus,
+} from "@/types";
 import { toast } from "sonner";
 
 interface FlightTelemetryPayload {
@@ -37,10 +42,17 @@ export function useSocket() {
   const updateSensorTelemetry = useAirportStore(
     (state) => state.updateSensorTelemetry,
   );
+  const updateSensorTelemetryBatch = useAirportStore(
+    (state) => state.updateSensorTelemetryBatch,
+  );
   const updateVehicleTelemetryBatch = useAirportStore(
     (state) => state.updateVehicleTelemetryBatch,
   );
   const setSimulationMode = useAirportStore((state) => state.setSimulationMode);
+  const setConnection = useAirportStore((state) => state.setConnection);
+  const updateAIForecastBatch = useAirportStore(
+    (state) => state.updateAIForecastBatch,
+  );
 
   useEffect(() => {
     // 1. STRIP THE API PATH: Socket.io connects to root, not /api/v1
@@ -54,10 +66,12 @@ export function useSocket() {
       transports: ["websocket", "polling"],
     });
 
-    socket.on("connect", () => console.log("🟢 Socket Connected:", socket.id));
+    setConnection("connecting");
+    socket.on("connect", () => setConnection("live"));
 
     socket.on("disconnect", (reason) => {
       console.warn("Socket disconnected:", reason);
+      setConnection("offline");
       toast.error("Telemetry Connection Lost", {
         description: "Showing last known cached data. Awaiting reconnect...",
         duration: 10000,
@@ -65,9 +79,10 @@ export function useSocket() {
       setSimulationMode("NONE");
     });
 
-    socket.on("connect_error", (err) =>
-      console.error("❌ Socket Error:", err.message),
-    );
+    socket.on("connect_error", (err) => {
+      console.error("❌ Socket Error:", err.message);
+      setConnection("offline");
+    });
 
     // 3. FLIGHTS
     socket.on("flights:telemetry:batch", (batch: FlightTelemetryPayload[]) => {
@@ -83,7 +98,18 @@ export function useSocket() {
       updatePlaneTelemetryBatch(mappedBatch);
     });
 
-    // 4. SENSORS
+    // 4. SENSORS (batched: one store update per tick for all sensors)
+    socket.on("sensors:telemetry:batch", (batch: SensorTelemetryPayload[]) => {
+      updateSensorTelemetryBatch(
+        batch.map((data) => ({
+          id: data.id,
+          value: data.val,
+          status: data.sts,
+        })),
+      );
+    });
+
+    // Legacy per-sensor event, kept while an older API build is still deployed
     socket.on("sensor:telemetry", (data: SensorTelemetryPayload) => {
       updateSensorTelemetry(data.id, data.val, data.sts);
     });
@@ -103,6 +129,11 @@ export function useSocket() {
       },
     );
 
+    // AI forecasts from the simulation engine (one batch for all sensors)
+    socket.on("ai:predictions:batch", (batch: AIPredictionPayload[]) => {
+      updateAIForecastBatch(batch);
+    });
+
     // Single vehicle status updates (e.g. from an admin panel overriding status)
     socket.on("vehicle:status-changed", (vehicle: Vehicle) => {
       updateVehicleTelemetryBatch([
@@ -119,7 +150,10 @@ export function useSocket() {
   }, [
     updatePlaneTelemetryBatch,
     updateSensorTelemetry,
+    updateSensorTelemetryBatch,
     updateVehicleTelemetryBatch,
     setSimulationMode,
+    setConnection,
+    updateAIForecastBatch,
   ]);
 }

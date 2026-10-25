@@ -12,8 +12,6 @@
     "install:ci": "npm ci --no-audit --no-fund --ignore-scripts"
   },
   "dependencies": {
-    "@arcgis/core": "^5.0.19",
-    "@esri/calcite-components": "^5.0.2",
     "@hookform/resolvers": "^5.2.2",
     "@tanstack/react-query": "^5.97.0",
     "@types/heatmap.js": "^2.0.41",
@@ -33,7 +31,6 @@
     "react-hook-form": "^7.72.1",
     "recharts": "^3.8.0",
     "shadcn": "^4.8.0",
-    "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
@@ -42,6 +39,8 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@arcgis/core": "^5.0.19",
+    "@esri/calcite-components": "^5.0.2",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/node": "^20.19.39",
     "@types/react": "^19.2.14",

@@ -1,4 +1,9 @@
 // src/constants/airport-coordinates.ts
+import {
+  LONG_THANH_RUNWAYS,
+  LONG_THANH_STANDS,
+  LONG_THANH_TERMINAL_AREA,
+} from "./long-thanh-osm";
 
 export const LONG_THANH_COORDS = {
   // 1. Core Infrastructure
@@ -7,65 +12,18 @@ export const LONG_THANH_COORDS = {
   ATC_TOWER: { lat: 10.777166637141557, lng: 107.04869528242126 },
   OUTER_GATE: { lat: 10.750674784003039, lng: 107.00907421492873 },
 
-  // 2. Terminal Polygons & Parking Lines
+  // 2. Terminal outline & aircraft stands (from OpenStreetMap, matching the 3D basemap terminal)
   TERMINALS: {
-    MAIN: {
-      area: [
-        { lat: 10.773008718159797, lng: 107.04086105423717 },
-        { lat: 10.774047198116524, lng: 107.04275931075628 },
-        { lat: 10.77463901841647, lng: 107.04257744187701 },
-        { lat: 10.778050337347418, lng: 107.04374822289273 },
-        { lat: 10.778206665272192, lng: 107.04329923409708 },
-        { lat: 10.775303419099764, lng: 107.04214550329326 },
-        { lat: 10.774733595328735, lng: 107.04002158723031 },
-        { lat: 10.777674917076357, lng: 107.03771685590925 },
-        { lat: 10.777429254734203, lng: 107.03734512504121 },
-        { lat: 10.774209067672718, lng: 107.03939978281073 },
-        { lat: 10.772529245082518, lng: 107.03829810775669 },
-        { lat: 10.77231013706672, lng: 107.03506066991201 },
-        { lat: 10.771838722376199, lng: 107.03505391116936 },
-        { lat: 10.771958236029533, lng: 107.03878473711923 },
-        { lat: 10.77153329837997, lng: 107.0392646078483 },
-      ],
-    },
-    T1_RIGHT: {
-      parking: {
-        start: { lat: 10.775865210048106, lng: 107.04276367590793 },
-        end: { lat: 10.777973131582414, lng: 107.04343959253568 },
-      },
-    },
-    T2_CENTER: {
-      parking: {
-        start: { lat: 10.775116894353356, lng: 107.03930899092178 },
-        end: { lat: 10.7774145338134, lng: 107.03760310609943 },
-      },
-    },
-    T3_LEFT: {
-      parking: {
-        start: { lat: 10.772102533423862, lng: 107.03768893678232 },
-        end: { lat: 10.772070914093357, lng: 107.03527494882616 },
-      },
-    },
+    MAIN: { area: LONG_THANH_TERMINAL_AREA },
+    T1_RIGHT: { stands: LONG_THANH_STANDS.T1 },
+    T2_CENTER: { stands: LONG_THANH_STANDS.T2 },
+    T3_LEFT: { stands: LONG_THANH_STANDS.T3 },
   },
 
-  // 3. Runway Extremes
+  // 3. Runways (OpenStreetMap)
   RUNWAYS: {
-    MAIN: {
-      area: [
-        { lat: 10.802400383552415, lng: 107.06490466155752 },
-        { lat: 10.800358431900554, lng: 107.06668061126459 },
-        { lat: 10.770569539611992, lng: 107.02693198473341 },
-        { lat: 10.773454446867156, lng: 107.02503613419944 },
-      ],
-    },
-    TAKEOFF: {
-      start: { lat: 10.772270944354036, lng: 107.02804809945589 },
-      end: { lat: 10.793577939075295, lng: 107.05662782851412 },
-    },
-    LANDING: {
-      start: { lat: 10.795031773100453, lng: 107.05555608869702 },
-      end: { lat: 10.774176101877813, lng: 107.026517043176 },
-    },
+    RWY_05R_23L: LONG_THANH_RUNWAYS["05R/23L"],
+    RWY_05L_23R: LONG_THANH_RUNWAYS["05L/23R"],
   },
 
   // 4. Ground Taxiways & Flight Paths

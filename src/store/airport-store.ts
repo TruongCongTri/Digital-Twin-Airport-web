@@ -16,6 +16,11 @@ import type {
   VehicleType,
 } from "@/types";
 
+export type ConnectionStatus = "connecting" | "live" | "offline";
+
+// Live samples kept per sensor for sparklines (~2 minutes at a 3s tick)
+const LIVE_HISTORY_LENGTH = 40;
+
 interface AirportStore {
   // UI & View State
   appState: AppState;
@@ -32,6 +37,9 @@ interface AirportStore {
   aiForecasts: Record<string, AIPredictionPayload>;
 
   // High-Speed Telemetry State
+  connection: ConnectionStatus;
+  lastTelemetryAt: number | null;
+  sensorLiveHistory: Record<string, number[]>;
   planes: Plane[];
   sensors: Sensor[];
   vehicles: Vehicle[];
@@ -50,6 +58,8 @@ interface AirportStore {
   setImmersiveActive: (active: boolean) => void;
   toggleMapFilter: (filterKey: string) => void;
 
+  setConnection: (status: ConnectionStatus) => void;
+
   // Actions - Data Ingestion
   setInitialData: (
     sensors: Sensor[],
@@ -61,7 +71,11 @@ interface AirportStore {
   updatePlaneTelemetryBatch: (telemetryBatch: Partial<Plane>[]) => void;
   updateVehicleTelemetryBatch: (telemetryBatch: Partial<Vehicle>[]) => void;
   updateSensorTelemetry: (id: string, value: number, status?: string) => void;
+  updateSensorTelemetryBatch: (
+    telemetryBatch: { id: string; value: number; status?: string }[],
+  ) => void;
   updateAIForecast: (payload: AIPredictionPayload) => void;
+  updateAIForecastBatch: (payloads: AIPredictionPayload[]) => void;
 
   // Getters
   getSelectedPlane: () => Plane | null;
@@ -97,6 +111,9 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   selectedEntityType: null,
   isCameraTracking: false,
   analysisMode: false,
+  connection: "connecting",
+  lastTelemetryAt: null,
+  sensorLiveHistory: {},
   planes: [],
   sensors: [],
   vehicles: [],
@@ -108,6 +125,7 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   mapFilters: {
     planes: true,
     vehicles: true,
+    bim: true,
     TEMPERATURE: true,
     TARMAC_TEMP: true,
     HUMIDITY: true,
@@ -127,11 +145,13 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       vehicles: [],
       tooltips: [],
       aiForecasts: {},
+      sensorLiveHistory: {},
       selectedEntityId: null,
       selectedEntityType: null,
       metrics: DEFAULT_METRICS,
     }),
 
+  setConnection: (status) => set({ connection: status }),
   setSimulationMode: (mode) => set({ simulationMode: mode }),
   setImmersiveActive: (active) => set({ isImmersiveActive: active }),
   setCameraTracking: (tracking) => set({ isCameraTracking: tracking }),
@@ -180,6 +200,13 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
   setInitialData: (sensors, planes, vehicles) => {
     set({
       sensors,
+      // Seed sparklines with the logged history so they are not empty on load
+      sensorLiveHistory: Object.fromEntries(
+        sensors.map((s) => [
+          s.id,
+          (s.history ?? []).map((h) => h.value).slice(-LIVE_HISTORY_LENGTH),
+        ]),
+      ),
       planes,
       vehicles,
       metrics: {
@@ -279,24 +306,9 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
             }),
             path: newPath.slice(-15),
           };
-        } else {
-          // ✅ NEW: Dynamically register unknown vehicles streaming from WebSocket
-          hasChanges = true;
-          updatedVehicles.push({
-            id: telemetry.id!,
-            callsign: telemetry.id!,
-            licensePlate: telemetry.id!,
-            type: (telemetry.type as VehicleType) || "OTHER",
-            status: (telemetry.status as VehicleStatus) || "IDLE",
-            brand: null,
-            carModel: null,
-            companyName: null,
-            speed: telemetry.speed || 0,
-            heading: telemetry.heading || 0,
-            position: telemetry.position || { longitude: 0, latitude: 0, z: 0 },
-            path: telemetry.position ? [telemetry.position] : [],
-          } as Vehicle);
         }
+        // Unknown ids are ignored: the socket stream carries every airport's vehicles,
+        // while the active airport's fleet is loaded over REST (setInitialData).
       });
 
       if (!hasChanges) return state;
@@ -316,6 +328,52 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
         return { sensors: updatedSensors };
       }
       return state;
+    }),
+
+  // One state update (and one map re-render) per tick for ALL sensors
+  updateSensorTelemetryBatch: (telemetryBatch) =>
+    set((state) => {
+      if (telemetryBatch.length === 0 || state.sensors.length === 0)
+        return state;
+
+      const updates = new Map(telemetryBatch.map((t) => [t.id, t]));
+      let hasChanges = false;
+
+      const sensorLiveHistory = { ...state.sensorLiveHistory };
+      for (const t of telemetryBatch) {
+        const series = sensorLiveHistory[t.id];
+        if (!series) continue; // sensor belongs to another airport
+        sensorLiveHistory[t.id] = [...series, t.value].slice(
+          -LIVE_HISTORY_LENGTH,
+        );
+      }
+
+      const updatedSensors = state.sensors.map((sensor) => {
+        const telemetry = updates.get(sensor.id);
+        if (!telemetry) return sensor;
+        if (
+          sensor.currentValue === telemetry.value &&
+          (!telemetry.status || sensor.status === telemetry.status)
+        )
+          return sensor;
+
+        hasChanges = true;
+        return {
+          ...sensor,
+          currentValue: telemetry.value,
+          ...(telemetry.status && {
+            status: telemetry.status as SensorStatus,
+          }),
+        };
+      });
+
+      return hasChanges
+        ? {
+            sensors: updatedSensors,
+            sensorLiveHistory,
+            lastTelemetryAt: Date.now(),
+          }
+        : state;
     }),
 
   updateTooltip: (tooltip) =>
@@ -361,6 +419,20 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
       }
       if (!hasChanges) return state;
       return { tooltips: newTooltips };
+    }),
+
+  updateAIForecastBatch: (payloads) =>
+    set((state) => {
+      // Only keep forecasts for sensors of the active airport
+      const known = new Set(state.sensors.map((s) => s.id));
+      const next = { ...state.aiForecasts };
+      let changed = false;
+      for (const p of payloads) {
+        if (!known.has(p.sensorId)) continue;
+        next[p.sensorId] = p;
+        changed = true;
+      }
+      return changed ? { aiForecasts: next } : state;
     }),
 
   updateAIForecast: (payload) =>

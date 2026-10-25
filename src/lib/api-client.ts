@@ -152,12 +152,24 @@ export const fetchStaticZones = async () => {
   const res = await apiClient.get("/zones/static");
   return res.data?.data || [];
 };
-export const fetchAllSensorLogs = async (airportId?: string) => {
-  try {
-    const res = await apiClient.get("/sensors/logs/all", {
-      params: { airportId },
+// All sensor logs of an airport within the last `minutes` (pages of 100, at most 10 pages)
+export const fetchAllSensorLogs = async (airportId?: string, minutes = 20) => {
+  const endDate = new Date().toISOString();
+  const startDate = new Date(Date.now() - minutes * 60_000).toISOString();
+  const page = (n: number) =>
+    apiClient.get("/sensors/logs/all", {
+      params: { airportId, startDate, endDate, limit: 100, page: n },
     });
-    return res.data?.data || [];
+  try {
+    const first = await page(1);
+    const totalPages = Math.min(
+      10,
+      first.data?.meta?.pagination?.totalPages ?? 1,
+    );
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => page(i + 2)),
+    );
+    return [first, ...rest].flatMap((r) => r.data?.data || []);
   } catch (error) {
     console.error("Failed to fetch bulk sensor logs", error);
     return [];
@@ -204,13 +216,15 @@ export const fetchInitialTelemetry = async (airportId: string) => {
       return { data: [] };
     });
 
-  const [sensorsRes, flightsRes, vehiclesRes, logsRes, zonesRes] =
+  const [sensorsRes, flightsRes, vehiclesRes, logsRes, zonesRes, liveRes] =
     await Promise.all([
       safeGet("/sensors", { params: { limit: 100, airportId } }),
       safeGet("/flights", { params: { limit: 100, airportId } }),
       safeGet("/ground-vehicles", { params: { limit: 100, airportId } }),
       safeGet("/sensors/logs/all", { params: { airportId } }),
       safeGet("/zones", { params: { airportId } }),
+      // Latest simulated values, served from the API's live cache (fresher than the DB flush)
+      safeGet("/sensors/live", { params: { airportId } }),
     ]);
 
   // ✅ Safely extract arrays
@@ -223,9 +237,21 @@ export const fetchInitialTelemetry = async (airportId: string) => {
   const zoneMap = new Map<string, RawZone>();
   rawZones.forEach((z) => zoneMap.set(z.id, z));
 
+  const liveValues: Record<string, number> =
+    (liveRes.data as { data?: { values?: Record<string, number> } })?.data
+      ?.values ?? {};
+
+  // Group logs once instead of filtering the whole list per sensor
+  const logsBySensor = new Map<string, RawSensorLog[]>();
+  rawLogs.forEach((log) => {
+    const list = logsBySensor.get(log.sensorId);
+    if (list) list.push(log);
+    else logsBySensor.set(log.sensorId, [log]);
+  });
+
   const mappedSensors: Sensor[] = rawSensors.map((item: RawSensor) => {
-    const historicalData = rawLogs
-      .filter((log: RawSensorLog) => log.sensorId === item.id)
+    const currentValue = liveValues[item.id] ?? item.currentValue;
+    const historicalData = (logsBySensor.get(item.id) ?? [])
       .map((log: RawSensorLog) => ({
         timestamp: log.timestamp,
         value: log.value,
@@ -260,7 +286,7 @@ export const fetchInitialTelemetry = async (airportId: string) => {
         z: item.z || 0,
       },
       unit: getUnitForType(item.type),
-      currentValue: item.currentValue,
+      currentValue,
       lastReadAt: item.lastReadAt,
       history:
         historicalData.length > 0
@@ -268,7 +294,7 @@ export const fetchInitialTelemetry = async (airportId: string) => {
           : [
               {
                 timestamp: item.lastReadAt || new Date().toISOString(),
-                value: item.currentValue,
+                value: currentValue,
               },
             ],
       zoneId: item.zoneId,
@@ -431,4 +457,54 @@ export const forceFlightPipeline = async (airportCode: string) => {
     airportCode,
   });
   return res.data;
+};
+
+// --- SENSOR HISTORY SERIES (datatable + history chart) ---
+export type SeriesGranularity = "auto" | "raw" | "hour" | "day";
+
+export interface SensorSeriesRow {
+  bucket: string; // ISO start of the sample / hour / local day
+  min: number;
+  max: number;
+  avg: number;
+  count: number;
+}
+
+export interface SensorSeries {
+  sensorId: string;
+  granularity: Exclude<SeriesGranularity, "auto">;
+  startDate: string;
+  endDate: string;
+  tz: string;
+  retention: { rawHours: number; rollupDays: number };
+  summary: {
+    samples: number;
+    min: number | null;
+    max: number | null;
+    avg: number | null;
+    first: string | null;
+    last: string | null;
+  };
+  rows: SensorSeriesRow[];
+}
+
+export const fetchSensorSeries = async (
+  sensorId: string,
+  params: {
+    startDate: string;
+    endDate: string;
+    granularity: SeriesGranularity;
+    tz: string;
+  },
+): Promise<SensorSeries> => {
+  try {
+    const res = await apiClient.get(`/sensors/${sensorId}/series`, { params });
+    return res.data?.data as SensorSeries;
+  } catch (err) {
+    // Surface the API's explanation (e.g. raw retention / range limits) to the UI
+    const message = (
+      err as { response?: { data?: { meta?: { message?: string } } } }
+    )?.response?.data?.meta?.message;
+    throw new Error(message || "Could not load sensor history");
+  }
 };

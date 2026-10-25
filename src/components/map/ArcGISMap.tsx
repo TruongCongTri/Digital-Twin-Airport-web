@@ -1,37 +1,8 @@
 "use client";
-import { useAirportStore } from "@/src/store/airport-store";
-import {
-  useEffect,
-  useRef,
-  useCallback,
-  useState,
-  ElementType,
-  useMemo,
-} from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  Layers,
-  Map as MapIcon,
-  Globe,
-  Moon,
-  Navigation,
-  Compass,
-  Sun,
-  Filter,
-  X,
-  Eye,
-  EyeOff,
-  ChevronDown,
-  ChevronRight,
-  MessageSquare,
-  MessageSquareOff,
-  BarChart2,
-  Car, // ✅ Changed to Car for civilian traffic
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type Collection from "@arcgis/core/core/Collection";
 import type Layer from "@arcgis/core/layers/Layer";
-
 import type SceneView from "@arcgis/core/views/SceneView";
 import type GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import type EsriMap from "@arcgis/core/Map";
@@ -47,39 +18,36 @@ import type Polygon from "@arcgis/core/geometry/Polygon";
 import type SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
 import type PointSymbol3D from "@arcgis/core/symbols/PointSymbol3D";
 import type ObjectSymbol3DLayer from "@arcgis/core/symbols/ObjectSymbol3DLayer";
+import type Camera from "@arcgis/core/Camera";
 
-import { Plane, TooltipData, Vehicle } from "@/types";
-import { APP_CONFIG } from "@/constants/app.constant";
+// Loaded with this lazy (ssr: false) chunk instead of globals.css, so the 340KB
+// ArcGIS theme no longer blocks the first paint of the rest of the UI.
+import "@arcgis/core/assets/esri/themes/light/main.css";
+import { loadArcGISModules } from "./arcgis-modules";
+
+import type { Plane, Sensor, TooltipData, Vehicle } from "@/types";
+import { getAirportConfig, type AirportConfig } from "@/constants/airports";
+import { useAirportStore } from "@/src/store/airport-store";
+import { useUIStore } from "@/src/store/useUIStore";
 import {
-  TAN_SON_NHAT_COORDS,
-  LONG_THANH_COORDS,
-} from "@/constants/airport-coordinate";
+  getSensorPlacements,
+  type SensorPlacement,
+} from "@/src/lib/sensor-placement";
+import {
+  getSensorHealth,
+  HEALTH_STYLES,
+  normalizeSensorValue,
+} from "@/src/lib/sensor-meta";
+import { loadBimManifest } from "@/src/lib/bim-manifest";
+import { onMapCommand } from "@/src/lib/map-commands";
+import { useViewportOcclusion } from "@/src/components/twin/map/useViewportOcclusion";
 
 type CoordPoint = { lat: number; lng: number };
+const toRing = (area: CoordPoint[]) => area.map((p) => [p.lng, p.lat]);
 
-type RouteGroup = {
-  taxiPath?: CoordPoint[];
-  flightInbound?: CoordPoint[];
-  inbound?: CoordPoint[];
-  flightOutbound?: CoordPoint[];
-  outbound?: CoordPoint[];
-};
-
-type BasemapOption = { id: string; label: string; icon: ElementType };
 interface WatchHandle {
   remove: () => void;
 }
-
-const BASEMAP_OPTIONS: BasemapOption[] = [
-  { id: "osm-3d", label: "OpenStreetMap 3D", icon: MapIcon },
-  { id: "streets-3d", label: "Streets 3D", icon: Navigation },
-  { id: "streets-dark-3d", label: "Streets Dark 3D", icon: Moon },
-  { id: "navigation-3d", label: "Navigation 3D", icon: Compass },
-  { id: "topo-3d", label: "Topographic 3D", icon: Globe },
-  { id: "gray-3d", label: "Light Canvas", icon: Sun },
-  { id: "dark-gray-3d", label: "Dark Canvas 3D", icon: Layers },
-  { id: "satellite", label: "Satellite Imagery 3D", icon: Globe },
-];
 
 const AIRBORNE_STATUSES = [
   "AIRBORNE",
@@ -105,68 +73,91 @@ const isPlaneOnGround = (plane: Plane) => {
   return true;
 };
 
-export interface GeographicEntity {
-  x?: number;
-  y?: number;
-  longitude?: number;
-  latitude?: number;
-  position?: {
-    longitude?: number;
-    latitude?: number;
-  };
-  type?: string;
-}
-
-const getLon = (entity: GeographicEntity) =>
-  entity.x ?? entity.longitude ?? entity.position?.longitude ?? 0;
-const getLat = (entity: GeographicEntity) =>
-  entity.y ?? entity.latitude ?? entity.position?.latitude ?? 0;
-
-const SENSOR_DISPERSION_ANGLES: Record<string, number> = {
-  TEMPERATURE: 0,
-  HUMIDITY: 51,
-  CO2: 102,
-  WIND_INDOOR: 153,
-  LIGHT_DENSITY: 204,
-  CAMERA_AI_CROWD: 255,
-  TILT_STRUCTURAL: 306,
-  WIND_OUTDOOR: 0,
-  TARMAC_TEMP: 180,
+const isPlaneOutbound = (plane: Plane) => {
+  const statusStr = (plane.status || "UNKNOWN").toUpperCase();
+  if (OUTBOUND_STATUSES.includes(statusStr)) return true;
+  if (INBOUND_STATUSES.includes(statusStr)) return false;
+  return HOME_ORIGINS.some((kw) =>
+    (plane.origin || "").toUpperCase().includes(kw),
+  );
 };
 
-const getOffsetCoords = (entity: GeographicEntity) => {
-  const baseLon = getLon(entity);
-  const baseLat = getLat(entity);
-  if (!entity.type || !SENSOR_DISPERSION_ANGLES.hasOwnProperty(entity.type)) {
-    return { lon: baseLon, lat: baseLat };
-  }
-  const radius = 0.0004;
-  const angleRad = SENSOR_DISPERSION_ANGLES[entity.type] * (Math.PI / 180);
+const getLon = (e: { position?: { longitude?: number } }) =>
+  e.position?.longitude ?? 0;
+const getLat = (e: { position?: { latitude?: number } }) =>
+  e.position?.latitude ?? 0;
+
+// Home camera per airport: BIM airports open closer and tilted to read the building
+const homeCamera = (airport: AirportConfig) => ({
+  center: [airport.center.lng, airport.center.lat],
+  zoom: airport.model ? 17 : 15,
+  tilt: airport.model ? 58 : 45,
+  heading: 0,
+});
+
+// Camera framing for a selected entity: distance (m) from the look-at point and tilt.
+// BIM airports frame closely inside the building; site airports keep a wider view.
+type SelectionKind = "sensor-indoor" | "sensor-outdoor" | "plane" | "vehicle";
+const FRAMING: Record<
+  "bim" | "site",
+  Record<SelectionKind, { distance: number; tilt: number }>
+> = {
+  bim: {
+    "sensor-indoor": { distance: 38, tilt: 62 },
+    "sensor-outdoor": { distance: 110, tilt: 62 },
+    plane: { distance: 140, tilt: 60 },
+    vehicle: { distance: 65, tilt: 60 },
+  },
+  site: {
+    "sensor-indoor": { distance: 420, tilt: 58 },
+    "sensor-outdoor": { distance: 520, tilt: 58 },
+    plane: { distance: 450, tilt: 58 },
+    vehicle: { distance: 260, tilt: 58 },
+  },
+};
+const METRES_PER_DEG = 111_320;
+
+/**
+ * Camera pose that looks straight at (lon, lat, z) from `distance` metres, keeping the
+ * current heading. Unlike goTo({ center }), this honours the target's elevation, so
+ * sensors on upper storeys end up centred instead of floating above the frame.
+ */
+const lookAtPose = (
+  lon: number,
+  lat: number,
+  z: number,
+  distance: number,
+  tilt: number,
+  heading: number,
+) => {
+  const h = (heading * Math.PI) / 180;
+  const t = (tilt * Math.PI) / 180;
+  const horizontal = distance * Math.sin(t);
+  const east = -Math.sin(h) * horizontal;
+  const north = -Math.cos(h) * horizontal;
   return {
-    lon: baseLon + Math.cos(angleRad) * radius,
-    lat: baseLat + Math.sin(angleRad) * radius,
+    position: {
+      longitude:
+        lon + east / (METRES_PER_DEG * Math.cos((lat * Math.PI) / 180)),
+      latitude: lat + north / METRES_PER_DEG,
+      z: z + distance * Math.cos(t),
+      spatialReference: { wkid: 4326 },
+    },
+    heading,
+    tilt,
   };
 };
 
-const getSensorColumnProps = (type: string, val: number) => {
-  if (type.includes("CO2"))
-    return { color: [239, 68, 68, 0.55], height: val / 10 };
-  if (type.includes("TEMP"))
-    return { color: [234, 179, 8, 0.55], height: val * 1.5 };
-  if (type.includes("HUMIDITY"))
-    return { color: [56, 189, 248, 0.55], height: val };
-  if (type.includes("WIND"))
-    return { color: [6, 182, 212, 0.55], height: val * 10 };
-  if (type.includes("TILT"))
-    return { color: [71, 85, 105, 0.55], height: val * 15000 };
-  if (type.includes("LIGHT"))
-    return { color: [202, 138, 4, 0.55], height: val / 10 };
-  if (type.includes("CROWD"))
-    return { color: [168, 85, 247, 0.55], height: val / 4 };
-  return { color: [156, 163, 175, 0.55], height: 30 };
+// Badge priority: selected > critical > warning > aircraft > vehicles > normal > offline
+const BADGE_PRIORITY = {
+  critical: 1,
+  warning: 2,
+  plane: 3,
+  vehicle: 4,
+  normal: 5,
+  offline: 6,
 };
 
-// ✅ SAFE ARRAY REFERENCE: Must be declared outside component
 const EMPTY_VEHICLES: Vehicle[] = [];
 
 export function ArcGISMap() {
@@ -182,10 +173,19 @@ export function ArcGISMap() {
   const footprintLayerRef = useRef<GraphicsLayer | null>(null);
   const maskLayerRef = useRef<GraphicsLayer | null>(null);
   const heatmapLayerRef = useRef<FeatureLayer | null>(null);
+  const bimLayerRef = useRef<GraphicsLayer | null>(null);
+  const heatmapSensorIdsRef = useRef<string[]>([]);
+  const heatmapEditPendingRef = useRef(false);
+  // Last rendered column per sensor + the visual key it was built for, so unchanged
+  // columns are not rebuilt on every telemetry tick
+  const sensorGraphicsRef = useRef<
+    Map<string, { graphic: Graphic; key: string }>
+  >(new Map());
 
   const FeatureLayerRef = useRef<typeof FeatureLayer | null>(null);
   const HeatmapRendererRef = useRef<typeof HeatmapRenderer | null>(null);
   const PointRef = useRef<typeof Point | null>(null);
+  const CameraRef = useRef<typeof Camera | null>(null);
   const GraphicRef = useRef<typeof Graphic | null>(null);
   const PointSymbol3DRef = useRef<typeof PointSymbol3D | null>(null);
   const ObjectSymbol3DLayerRef = useRef<typeof ObjectSymbol3DLayer | null>(
@@ -198,208 +198,239 @@ export function ArcGISMap() {
   const PolygonRef = useRef<typeof Polygon | null>(null);
   const SimpleFillRef = useRef<typeof SimpleFillSymbol | null>(null);
 
-  const [currentBasemap, setCurrentBasemap] = useState("osm-3d");
-  const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
-  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isMapReady, setIsMapReady] = useState(false);
-  const [isSensorsExpanded, setIsSensorsExpanded] = useState(false);
+  const [bimReady, setBimReady] = useState(false);
 
   const activeAirport = useAirportStore((state) => state.activeAirport);
   const planes = useAirportStore((state) => state.planes);
   const sensors = useAirportStore((state) => state.sensors);
   const vehicles = useAirportStore((state) => state.vehicles ?? EMPTY_VEHICLES);
-
   const selectEntity = useAirportStore((state) => state.selectEntity);
   const selectedEntityId = useAirportStore((state) => state.selectedEntityId);
   const selectedEntityType = useAirportStore(
     (state) => state.selectedEntityType,
   );
-
   const isImmersiveActive = useAirportStore((state) => state.isImmersiveActive);
   const focusedSensor = useAirportStore((state) => state.getSelectedSensor());
-
   const mapFilters = useAirportStore((state) => state.mapFilters);
-  const toggleMapFilter = useAirportStore((state) => state.toggleMapFilter);
 
-  const filterKeys = useMemo(() => Object.keys(mapFilters), [mapFilters]);
-  const sensorKeys = useMemo(
-    () =>
-      filterKeys.filter(
-        (k) =>
-          !["planes", "vehicles", "tooltips", "cylinders"].includes(k) &&
-          !k.startsWith("tooltips_") &&
-          !k.startsWith("cylinders_"),
+  const basemap = useUIStore((state) => state.basemap);
+  const bimXray = useUIStore((state) => state.bimXray);
+  const hiddenStoreys = useUIStore((state) => state.hiddenStoreys);
+  const occlusion = useViewportOcclusion();
+  const autoSection = useUIStore((state) => state.autoSection);
+
+  const placementsFor = useCallback(
+    (list: Sensor[]) =>
+      getSensorPlacements(
+        list,
+        getAirportConfig(useAirportStore.getState().activeAirport),
       ),
-    [filterKeys],
+    [],
   );
 
-  const allSensorsVisible = useMemo(
-    () => sensorKeys.every((k) => mapFilters[k] !== false),
-    [sensorKeys, mapFilters],
+  // --- Frame the current selection (sensor column top, aircraft or vehicle) ---
+  const focusSelection = useCallback(
+    (duration: number) => {
+      const view = viewRef.current;
+      const CameraClass = CameraRef.current;
+      if (!view || view.destroyed || !view.ready || !CameraClass) return;
+      const store = useAirportStore.getState();
+      const framing =
+        FRAMING[getAirportConfig(store.activeAirport).model ? "bim" : "site"];
+
+      let target: {
+        lon: number;
+        lat: number;
+        z: number;
+        kind: SelectionKind;
+      } | null = null;
+      const sensor = store.getSelectedSensor();
+      if (sensor) {
+        const p = placementsFor(store.sensors).get(sensor.id);
+        // Look at the column top: at these framing distances the column below it and the
+        // expanded badge above it are about the same height, so the pair is centred
+        if (p) {
+          target = {
+            lon: p.lon,
+            lat: p.lat,
+            z: p.z + p.columnHeight,
+            kind:
+              p.environment === "indoor" ? "sensor-indoor" : "sensor-outdoor",
+          };
+        }
+      } else {
+        const plane = store.getSelectedPlane();
+        const vehicle = store.getSelectedVehicle();
+        const entity = plane ?? vehicle;
+        if (entity)
+          target = {
+            lon: getLon(entity),
+            lat: getLat(entity),
+            z: plane ? 10 : 5,
+            kind: plane ? "plane" : "vehicle",
+          };
+      }
+      if (!target) return;
+
+      const { distance, tilt } = framing[target.kind];
+      const pose = lookAtPose(
+        target.lon,
+        target.lat,
+        target.z,
+        distance,
+        tilt,
+        view.camera.heading || 0,
+      );
+      view
+        .goTo(new CameraClass(pose), { duration, easing: "ease-in-out" })
+        .catch(() => undefined);
+    },
+    [placementsFor],
   );
 
-  const allSensorTooltipsVisible = useMemo(
-    () => sensorKeys.every((k) => mapFilters[`tooltips_${k}`] !== false),
-    [sensorKeys, mapFilters],
-  );
+  // --- Screen-space badges (positions + collision culling; MapBadges renders them) ---
+  const syncTooltips = useCallback(
+    (view: SceneView) => {
+      if (!view?.ready || view.destroyed) return;
+      const PointClass = PointRef.current;
+      if (!PointClass) return;
 
-  const allSensorCylindersVisible = useMemo(
-    () => sensorKeys.every((k) => mapFilters[`cylinders_${k}`] !== false),
-    [sensorKeys, mapFilters],
-  );
+      const store = useAirportStore.getState();
+      const raw: (TooltipData & { priority: number })[] = [];
+      const toScreen = (lon: number, lat: number, z: number) =>
+        view.toScreen(
+          new PointClass({
+            longitude: lon,
+            latitude: lat,
+            z,
+            spatialReference: { wkid: 4326 },
+          }),
+        );
 
-  const handleToggleAllSensors = () => {
-    const targetState = !allSensorsVisible;
-    sensorKeys.forEach((k) => {
       if (
-        (mapFilters[k] !== false && !targetState) ||
-        (mapFilters[k] === false && targetState)
+        store.mapFilters["planes"] !== false &&
+        store.mapFilters["tooltips_planes"] !== false
       ) {
-        toggleMapFilter(k);
-      }
-    });
-  };
-
-  const handleToggleAllSensorTooltips = () => {
-    const targetState = !allSensorTooltipsVisible;
-    sensorKeys.forEach((k) => {
-      const current = mapFilters[`tooltips_${k}`] !== false;
-      if (current !== targetState) toggleMapFilter(`tooltips_${k}`);
-    });
-  };
-
-  const handleToggleAllSensorCylinders = () => {
-    const targetState = !allSensorCylindersVisible;
-    sensorKeys.forEach((k) => {
-      const current = mapFilters[`cylinders_${k}`] !== false;
-      if (current !== targetState) toggleMapFilter(`cylinders_${k}`);
-    });
-  };
-
-  const handleBasemapChange = useCallback((basemapId: string) => {
-    setCurrentBasemap(basemapId);
-    if (mapInstanceRef.current) mapInstanceRef.current.basemap = basemapId;
-    setIsBasemapMenuOpen(false);
-  }, []);
-
-  const syncTooltips = useCallback((view: SceneView) => {
-    if (!view?.ready || view.destroyed) return;
-    const PointClass = PointRef.current;
-    if (!PointClass) return;
-
-    const store = useAirportStore.getState();
-    const rawTooltips: TooltipData[] = [];
-
-    const focusedId = store.selectedEntityId;
-    const focusedType = store.selectedEntityType;
-
-    const planesVisible = store.mapFilters["planes"] !== false;
-    const planeTooltipsOn = store.mapFilters["tooltips_planes"] !== false;
-
-    if (planesVisible && planeTooltipsOn) {
-      store.planes.forEach((plane) => {
-        if (!isPlaneOnGround(plane)) return;
-        if (focusedType === "plane" && focusedId && focusedId !== plane.id)
-          return;
-
-        const screen = view.toScreen(
-          new PointClass({
-            longitude: getLon(plane),
-            latitude: getLat(plane),
-            z: 15,
-            spatialReference: { wkid: 4326 },
-          }),
-        );
-        if (screen)
-          rawTooltips.push({
-            entityId: plane.id,
-            entityType: "plane",
-            screenX: Math.round(screen.x),
-            screenY: Math.round(screen.y),
-            visible: true,
-          });
-      });
-    }
-
-    const vehiclesVisible = store.mapFilters["vehicles"] !== false;
-    const vehicleTooltipsOn = store.mapFilters["tooltips_vehicles"] !== false;
-
-    if (vehiclesVisible && vehicleTooltipsOn && store.vehicles) {
-      store.vehicles.forEach((vehicle) => {
-        if (focusedType === "vehicle" && focusedId && focusedId !== vehicle.id)
-          return;
-
-        const screen = view.toScreen(
-          new PointClass({
-            longitude: getLon(vehicle),
-            latitude: getLat(vehicle),
-            z: 5,
-            spatialReference: { wkid: 4326 },
-          }),
-        );
-        if (screen)
-          rawTooltips.push({
-            entityId: vehicle.id,
-            entityType: "vehicle",
-            screenX: Math.round(screen.x),
-            screenY: Math.round(screen.y),
-            visible: true,
-          });
-      });
-    }
-
-    store.sensors.forEach((sensor) => {
-      const sensorTypeVisible = store.mapFilters[sensor.type] !== false;
-      const sensorTooltipOn =
-        store.mapFilters[`tooltips_${sensor.type}`] !== false;
-
-      if (!sensorTypeVisible || !sensorTooltipOn) return;
-      if (focusedType === "sensor" && focusedId && focusedId !== sensor.id)
-        return;
-
-      const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
-      const dynamicHeight = Math.max(colProps.height, 10);
-      const zElevation = 25 + dynamicHeight;
-
-      const coords = getOffsetCoords(sensor);
-
-      const screen = view.toScreen(
-        new PointClass({
-          longitude: coords.lon,
-          latitude: coords.lat,
-          z: zElevation,
-          spatialReference: { wkid: 4326 },
-        }),
-      );
-      if (screen)
-        rawTooltips.push({
-          entityId: sensor.id,
-          entityType: "sensor",
-          screenX: Math.round(screen.x),
-          screenY: Math.round(screen.y),
-          visible: true,
+        store.planes.forEach((plane) => {
+          if (!isPlaneOnGround(plane)) return;
+          const screen = toScreen(getLon(plane), getLat(plane), 15);
+          if (screen)
+            raw.push({
+              entityId: plane.id,
+              entityType: "plane",
+              screenX: Math.round(screen.x),
+              screenY: Math.round(screen.y),
+              visible: true,
+              priority: BADGE_PRIORITY.plane,
+            });
         });
-    });
-
-    const visibleTooltips: TooltipData[] = [];
-    const COLLISION_RADIUS = 25;
-
-    for (const tooltip of rawTooltips) {
-      if (tooltip.entityId === store.selectedEntityId) {
-        visibleTooltips.push(tooltip);
-        continue;
       }
-      const hasCollision = visibleTooltips.some(
-        (v) =>
-          Math.abs(v.screenX - tooltip.screenX) < COLLISION_RADIUS &&
-          Math.abs(v.screenY - tooltip.screenY) < COLLISION_RADIUS,
-      );
-      if (!hasCollision) visibleTooltips.push(tooltip);
-    }
-    store.updateAllTooltips(visibleTooltips);
-  }, []);
 
-  // Map Initialization & Core Layout Definition
+      if (
+        store.mapFilters["vehicles"] !== false &&
+        store.mapFilters["tooltips_vehicles"] !== false
+      ) {
+        store.vehicles?.forEach((vehicle) => {
+          if (vehicle.status === "EXITING") return;
+          const screen = toScreen(getLon(vehicle), getLat(vehicle), 5);
+          if (screen)
+            raw.push({
+              entityId: vehicle.id,
+              entityType: "vehicle",
+              screenX: Math.round(screen.x),
+              screenY: Math.round(screen.y),
+              visible: true,
+              priority: BADGE_PRIORITY.vehicle,
+            });
+        });
+      }
+
+      const placements = placementsFor(store.sensors);
+      store.sensors.forEach((sensor) => {
+        if (
+          store.mapFilters[sensor.type] === false ||
+          store.mapFilters[`tooltips_${sensor.type}`] === false
+        )
+          return;
+        const p = placements.get(sensor.id);
+        if (!p) return;
+        // Anchor at the top of the column track (or the sensor point if columns are hidden)
+        const columnsOn =
+          store.mapFilters[`cylinders_${sensor.type}`] !== false;
+        const screen = toScreen(
+          p.lon,
+          p.lat,
+          p.z + (columnsOn ? p.columnHeight : 0) + 0.5,
+        );
+        if (screen)
+          raw.push({
+            entityId: sensor.id,
+            entityType: "sensor",
+            screenX: Math.round(screen.x),
+            screenY: Math.round(screen.y),
+            visible: true,
+            priority:
+              BADGE_PRIORITY[
+                getSensorHealth(sensor.type, sensor.currentValue, sensor.status)
+              ],
+          });
+      });
+
+      // Place higher-priority badges first so alerts are never culled behind normal readings
+      raw.sort(
+        (a, b) =>
+          (a.entityId === store.selectedEntityId ? -1 : a.priority) -
+          (b.entityId === store.selectedEntityId ? -1 : b.priority),
+      );
+
+      const visible: TooltipData[] = [];
+      const BADGE_W = 86;
+      const BADGE_H = 26;
+      for (const t of raw) {
+        const tooltip: TooltipData = {
+          entityId: t.entityId,
+          entityType: t.entityType,
+          screenX: t.screenX,
+          screenY: t.screenY,
+          visible: true,
+        };
+        if (t.entityId === store.selectedEntityId) {
+          visible.push(tooltip);
+          continue;
+        }
+        const collides = visible.some(
+          (v) =>
+            Math.abs(v.screenX - t.screenX) < BADGE_W &&
+            Math.abs(v.screenY - t.screenY) < BADGE_H,
+        );
+        if (!collides) visible.push(tooltip);
+      }
+      store.updateAllTooltips(visible);
+    },
+    [placementsFor],
+  );
+
+  // --- BIM storey symbols (X-ray = translucent model so indoor sensors stay visible) ---
+  const buildBimSymbol = useCallback(
+    (href: string, heading: number, xray: boolean) => {
+      const PointSymbol3DClass = PointSymbol3DRef.current!;
+      const ObjectSymbol3DLayerClass = ObjectSymbol3DLayerRef.current!;
+      return new PointSymbol3DClass({
+        symbolLayers: [
+          new ObjectSymbol3DLayerClass({
+            resource: { href },
+            anchor: "origin",
+            heading,
+            ...(xray && { material: { color: [255, 255, 255, 0.28] } }),
+          }),
+        ],
+      });
+    },
+    [],
+  );
+
+  // --- Map initialisation (re-runs per airport) ---
   useEffect(() => {
     if (!mapContainerRef.current) return;
     let destroyed = false;
@@ -425,27 +456,12 @@ export function ArcGISMap() {
         { default: PolygonClass },
         { default: SimpleFillClass },
         reactiveUtils,
-      ] = await Promise.all([
-        import("@arcgis/core/Map"),
-        import("@arcgis/core/views/SceneView"),
-        import("@arcgis/core/layers/GraphicsLayer"),
-        import("@arcgis/core/Graphic"),
-        import("@arcgis/core/geometry/Point"),
-        import("@arcgis/core/symbols/PointSymbol3D"),
-        import("@arcgis/core/symbols/ObjectSymbol3DLayer"),
-        import("@arcgis/core/symbols/PictureMarkerSymbol"),
-        import("@arcgis/core/geometry/Polyline"),
-        import("@arcgis/core/symbols/SimpleLineSymbol"),
-        import("@arcgis/core/Color"),
-        import("@arcgis/core/layers/FeatureLayer"),
-        import("@arcgis/core/renderers/HeatmapRenderer"),
-        import("@arcgis/core/geometry/Polygon"),
-        import("@arcgis/core/symbols/SimpleFillSymbol"),
-        import("@arcgis/core/core/reactiveUtils"),
-      ]);
+        { default: CameraClass },
+      ] = await loadArcGISModules();
 
       if (destroyed) return;
       PointRef.current = PointClass;
+      CameraRef.current = CameraClass;
       GraphicRef.current = GraphicClass;
       PointSymbol3DRef.current = PointSymbol3DClass;
       ObjectSymbol3DLayerRef.current = ObjectSymbol3DLayerClass;
@@ -458,9 +474,20 @@ export function ArcGISMap() {
       PolygonRef.current = PolygonClass;
       SimpleFillRef.current = SimpleFillClass;
 
-      const map = new ArcMap({ basemap: currentBasemap });
+      const airport = getAirportConfig(activeAirport);
+      const map = new ArcMap({ basemap: useUIStore.getState().basemap });
       mapInstanceRef.current = map;
 
+      // Pavement + BIM building for airports the basemap does not show (greenfield sites)
+      const pavementLayer = new GraphicsLayer({
+        title: "Airfield Pavement",
+        elevationInfo: { mode: "on-the-ground" },
+      });
+      const bimLayer = new GraphicsLayer({
+        title: "Terminal BIM Model",
+        elevationInfo: { mode: "relative-to-ground", offset: 0 },
+        visible: useAirportStore.getState().mapFilters["bim"] !== false,
+      });
       const staticRoutesLayer = new GraphicsLayer({
         title: "Taxi Routes",
         elevationInfo: { mode: "on-the-ground" },
@@ -489,9 +516,10 @@ export function ArcGISMap() {
         screenSizePerspectiveEnabled: false,
         elevationInfo: { mode: "relative-to-scene", offset: 5 },
       });
+      // Columns stand at each sensor's own elevation (storey level inside the BIM)
       const sensorLayer = new GraphicsLayer({
         title: "Sensors",
-        elevationInfo: { mode: "relative-to-scene", offset: 25 },
+        elevationInfo: { mode: "relative-to-ground" },
       });
       const labelLayer = new GraphicsLayer({
         title: "Airline Labels",
@@ -500,9 +528,11 @@ export function ArcGISMap() {
       });
 
       map.addMany([
+        pavementLayer,
         staticRoutesLayer,
         footprintLayer,
         maskLayer,
+        bimLayer,
         pathLayer,
         sensorLayer,
         vehicleLayer,
@@ -514,98 +544,109 @@ export function ArcGISMap() {
       footprintLayerRef.current = footprintLayer;
       maskLayerRef.current = maskLayer;
       vehicleLayerRef.current = vehicleLayer;
+      bimLayerRef.current = bimLayer;
+      planeLayerRef.current = planeLayer;
+      sensorLayerRef.current = sensorLayer;
+      pathLayerRef.current = pathLayer;
+      sensorGraphicsRef.current = new Map(); // fresh layer, nothing rendered yet
 
-      // DYNAMIC FOOTPRINTS BASED ON ACTIVE AIRPORT
-      const isVVTS = activeAirport === "VVTS";
-
-      const BLUEPRINT_TERMINAL = isVVTS
-        ? [
-            TAN_SON_NHAT_COORDS.TERMINALS.DOMESTIC.area.map((p) => [
-              p.lng,
-              p.lat,
-            ]),
-            TAN_SON_NHAT_COORDS.TERMINALS.INTERNATIONAL.area.map((p) => [
-              p.lng,
-              p.lat,
-            ]),
-          ]
-        : [LONG_THANH_COORDS.TERMINALS.MAIN.area.map((p) => [p.lng, p.lat])];
-
-      const BLUEPRINT_TARMAC = isVVTS
-        ? [
-            TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25L_07R.area.map((p) => [
-              p.lng,
-              p.lat,
-            ]),
-            TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25R_07L.area.map((p) => [
-              p.lng,
-              p.lat,
-            ]),
-          ]
-        : [LONG_THANH_COORDS.RUNWAYS.MAIN.area.map((p) => [p.lng, p.lat])];
-
-      footprintLayer.addMany([
-        new GraphicClass({
-          geometry: new PolygonClass({ rings: BLUEPRINT_TERMINAL }),
-          symbol: new SimpleFillClass({
-            color: [0, 0, 0, 0],
-            outline: { color: [255, 255, 255, 0.8], width: 2, style: "solid" },
+      if (airport.pavedAreas) {
+        pavementLayer.add(
+          new GraphicClass({
+            geometry: new PolygonClass({
+              rings: airport.pavedAreas.map(toRing),
+            }),
+            symbol: new SimpleFillClass({
+              color: [120, 124, 130, 0.9],
+              outline: { color: [255, 255, 255, 0.6], width: 1 },
+            }),
           }),
-        }),
-        new GraphicClass({
-          geometry: new PolygonClass({ rings: BLUEPRINT_TARMAC }),
-          symbol: new SimpleFillClass({
-            color: [0, 0, 0, 0],
-            outline: { color: [255, 255, 255, 0.8], width: 2, style: "solid" },
-          }),
-        }),
-      ]);
+        );
+      }
 
-      const initialCenter = isVVTS
-        ? TAN_SON_NHAT_COORDS.CENTER
-        : LONG_THANH_COORDS.CENTER;
+      footprintLayer.addMany(
+        [airport.terminalAreas, airport.runwayAreas].map(
+          (areas) =>
+            new GraphicClass({
+              geometry: new PolygonClass({ rings: areas.map(toRing) }),
+              symbol: new SimpleFillClass({
+                color: [0, 0, 0, 0],
+                outline: {
+                  color: [255, 255, 255, 0.8],
+                  width: 2,
+                  style: "solid",
+                },
+              }),
+            }),
+        ),
+      );
 
       const view = new SceneView({
         container: mapContainerRef.current!,
         map,
-        center: [initialCenter.lng, initialCenter.lat],
+        center: [airport.center.lng, airport.center.lat],
         zoom: 15,
         environment: {
-          background: { type: "color", color: [247, 247, 248, 1] },
+          background: { type: "color", color: [236, 238, 241, 1] },
           atmosphereEnabled: false,
           starsEnabled: false,
         },
         ui: { components: [] },
+        // Clicks are handled by our own hitTest; skips loading the popup widget
+        popupEnabled: false,
       });
-
       viewRef.current = view;
-      planeLayerRef.current = planeLayer;
-      sensorLayerRef.current = sensorLayer;
-      pathLayerRef.current = pathLayer;
 
       await view.when();
       if (destroyed) return;
+      view.goTo(homeCamera(airport), { animate: false }).catch(() => undefined);
 
-      // Draw Routes
-      const routeGroups: RouteGroup[] = isVVTS
-        ? [
-            TAN_SON_NHAT_COORDS.ROUTES.DOMESTIC,
-            TAN_SON_NHAT_COORDS.ROUTES.INTERNATIONAL,
-          ]
-        : [
-            LONG_THANH_COORDS.ROUTES.T1,
-            LONG_THANH_COORDS.ROUTES.T2,
-            LONG_THANH_COORDS.ROUTES.T3,
-          ];
+      // BIM storeys (one glTF per IfcBuildingStorey) load in the background
+      if (airport.model) {
+        const { baseUrl, origin, heading } = airport.model;
+        loadBimManifest(baseUrl)
+          .then((manifest) => {
+            if (destroyed) return;
+            const { bimXray, hiddenStoreys } = useUIStore.getState();
+            bimLayer.addMany(
+              manifest.storeys.map(
+                (st) =>
+                  new GraphicClass({
+                    geometry: new PointClass({
+                      longitude: origin.lng,
+                      latitude: origin.lat,
+                      z: 0,
+                      spatialReference: { wkid: 4326 },
+                    }),
+                    symbol: buildBimSymbol(
+                      `${baseUrl}/${st.file}`,
+                      heading,
+                      bimXray,
+                    ),
+                    attributes: {
+                      storeyId: st.id,
+                      href: `${baseUrl}/${st.file}`,
+                      elevation: st.elevation,
+                    },
+                    visible: !hiddenStoreys.includes(st.id),
+                  }),
+              ),
+            );
+            setBimReady(true);
+          })
+          .catch((err) =>
+            console.warn("[BIM] Failed to load model manifest", err),
+          );
+      }
 
-      routeGroups.forEach((routes) => {
-        const inboundArray = routes.flightInbound || routes.inbound || [];
-        const outboundArray = routes.flightOutbound || routes.outbound || [];
-
+      // Static routes
+      airport.routeGroups.forEach((routes) => {
+        const inbound = routes.flightInbound || routes.inbound || [];
+        const outbound = routes.flightOutbound || routes.outbound || [];
         staticRoutesLayer.addMany([
           new GraphicClass({
             geometry: new PolylineClass({
-              paths: [inboundArray.map((pt) => [pt.lng, pt.lat])],
+              paths: [inbound.map((pt) => [pt.lng, pt.lat])],
             }),
             symbol: new LineClass({
               color: new ColorClass([16, 185, 129, 0.35]),
@@ -615,7 +656,7 @@ export function ArcGISMap() {
           }),
           new GraphicClass({
             geometry: new PolylineClass({
-              paths: [outboundArray.map((pt) => [pt.lng, pt.lat])],
+              paths: [outbound.map((pt) => [pt.lng, pt.lat])],
             }),
             symbol: new LineClass({
               color: new ColorClass([245, 158, 11, 0.35]),
@@ -624,8 +665,6 @@ export function ArcGISMap() {
             }),
           }),
         ]);
-
-        // Add Ground Vehicle paths if available
         if (routes.taxiPath && routes.taxiPath.length > 0) {
           staticRoutesLayer.add(
             new GraphicClass({
@@ -633,7 +672,7 @@ export function ArcGISMap() {
                 paths: [routes.taxiPath.map((pt) => [pt.lng, pt.lat])],
               }),
               symbol: new LineClass({
-                color: new ColorClass([168, 162, 158, 0.35]), // Gray for ground vehicles
+                color: new ColorClass([168, 162, 158, 0.35]),
                 width: 2,
                 style: "solid",
               }),
@@ -644,104 +683,78 @@ export function ArcGISMap() {
 
       view.on("click", async (event) => {
         if (useAirportStore.getState().isImmersiveActive) return;
-
-        const response = await view.hitTest(event);
+        const response = await view.hitTest(event, {
+          include: [sensorLayer, planeLayer, vehicleLayer],
+        });
         const hit = response.results.find(
           (r) => r.type === "graphic" && r.graphic?.attributes?.type,
         );
-        if (
-          hit &&
-          hit.type === "graphic" &&
-          hit.graphic.attributes.type !== "label"
-        ) {
+        if (hit && hit.type === "graphic") {
           event.stopPropagation();
           selectEntity(hit.graphic.attributes.id, hit.graphic.attributes.type);
         }
       });
 
       handleMapReset = () => {
-        const center =
-          activeAirport === "VVTS"
-            ? TAN_SON_NHAT_COORDS.CENTER
-            : LONG_THANH_COORDS.CENTER;
         if (!view.destroyed)
-          view.goTo(
-            {
-              center: [center.lng, center.lat],
-              zoom: 15,
-              tilt: 60,
-            },
-            { duration: 1500, easing: "ease-in-out" },
-          );
+          view.goTo(homeCamera(airport), {
+            duration: 1500,
+            easing: "ease-in-out",
+          });
       };
       window.addEventListener("reset-map-view", handleMapReset);
 
+      let lastCameraHeading = Number.NaN;
       watchHandle = reactiveUtils.watch(
         () => view?.camera,
         () => {
-          if (!destroyed && view && !view.destroyed) {
-            cancelAnimationFrame(rAFId);
-            rAFId = requestAnimationFrame(() => {
-              syncTooltips(view);
+          if (destroyed || !view || view.destroyed) return;
+          cancelAnimationFrame(rAFId);
+          rAFId = requestAnimationFrame(() => {
+            syncTooltips(view);
+            const cameraHeading = view.camera.heading || 0;
+            // Panning/zooming does not change icon angles; only re-clone symbols on rotation
+            if (Math.abs(cameraHeading - lastCameraHeading) < 0.5) return;
+            lastCameraHeading = cameraHeading;
 
-              const cameraHeading = view.camera.heading || 0;
-
-              // Rotate Planes
-              const currentPlanes = useAirportStore.getState().planes;
-              const planeMap = new Map(currentPlanes.map((p) => [p.id, p]));
-              planeLayerRef.current?.graphics.forEach((g) => {
-                const plane = planeMap.get(g.attributes.id);
-                if (plane && g.symbol) {
-                  const statusStr = (plane.status || "UNKNOWN").toUpperCase();
-                  const originStr = (plane.origin || "").toUpperCase();
-
-                  const isHomeOrigin = HOME_ORIGINS.some((kw) =>
-                    originStr.includes(kw),
-                  );
-
-                  let isOutbound = false;
-                  if (OUTBOUND_STATUSES.includes(statusStr)) isOutbound = true;
-                  else if (INBOUND_STATUSES.includes(statusStr))
-                    isOutbound = false;
-                  else isOutbound = isHomeOrigin;
-
-                  const direction = isOutbound ? "outbound" : "inbound";
-                  const baseHeading =
-                    direction === "inbound"
-                      ? plane.heading + 180
-                      : plane.heading;
-                  const visualHeading = baseHeading - cameraHeading;
-
-                  const updatedSymbol = g.symbol.clone() as PictureMarkerSymbol;
-                  updatedSymbol.angle = visualHeading;
-                  g.symbol = updatedSymbol;
-                }
-              });
-
-              // Rotate Vehicles
-              const currentVehicles = useAirportStore.getState().vehicles;
-              const vehicleMap = new Map(currentVehicles.map((v) => [v.id, v]));
-              vehicleLayerRef.current?.graphics.forEach((g) => {
-                const vehicle = vehicleMap.get(g.attributes.id);
-                if (vehicle && g.symbol) {
-                  const visualHeading = (vehicle.heading || 0) - cameraHeading;
-                  const updatedSymbol = g.symbol.clone() as PictureMarkerSymbol;
-                  updatedSymbol.angle = visualHeading;
-                  g.symbol = updatedSymbol;
-                }
-              });
+            const planeMap = new Map(
+              useAirportStore.getState().planes.map((p) => [p.id, p]),
+            );
+            planeLayerRef.current?.graphics.forEach((g) => {
+              const plane = planeMap.get(g.attributes.id);
+              if (plane && g.symbol) {
+                const baseHeading = isPlaneOutbound(plane)
+                  ? plane.heading
+                  : plane.heading + 180;
+                const updated = g.symbol.clone() as PictureMarkerSymbol;
+                updated.angle = baseHeading - cameraHeading;
+                g.symbol = updated;
+              }
             });
-          }
+            const vehicleMap = new Map(
+              useAirportStore.getState().vehicles.map((v) => [v.id, v]),
+            );
+            vehicleLayerRef.current?.graphics.forEach((g) => {
+              const vehicle = vehicleMap.get(g.attributes.id);
+              if (vehicle && g.symbol) {
+                const updated = g.symbol.clone() as PictureMarkerSymbol;
+                updated.angle = (vehicle.heading || 0) - cameraHeading;
+                g.symbol = updated;
+              }
+            });
+          });
         },
       );
 
-      await syncTooltips(view);
+      syncTooltips(view);
       setIsMapReady(true);
     };
 
     init();
     return () => {
       destroyed = true;
+      setIsMapReady(false);
+      setBimReady(false);
       cancelAnimationFrame(rAFId);
       if (watchHandle) watchHandle.remove();
       if (handleMapReset)
@@ -751,22 +764,100 @@ export function ArcGISMap() {
         viewRef.current = null;
       }
     };
-  }, [currentBasemap, syncTooltips, selectEntity, activeAirport]);
+  }, [syncTooltips, selectEntity, activeAirport, buildBimSymbol]);
+
+  // --- Basemap switch (no SceneView rebuild) ---
+  useEffect(() => {
+    if (
+      mapInstanceRef.current &&
+      mapInstanceRef.current.basemap?.id !== basemap
+    ) {
+      mapInstanceRef.current.basemap = basemap;
+    }
+  }, [basemap, isMapReady]);
+
+  // --- BIM: model visibility, storey isolation, X-ray, auto cut-away ---
+  // With auto cut-away on, selecting an indoor sensor hides the storeys above its
+  // floor and ghosts the model, so the camera can look straight at the sensor.
+  const cutAwayFloor =
+    autoSection && focusedSensor && getAirportConfig(activeAirport).model
+      ? placementsFor(sensors).get(focusedSensor.id)?.environment === "indoor"
+        ? (focusedSensor.z ?? 0)
+        : null
+      : null;
+  useEffect(() => {
+    const layer = bimLayerRef.current;
+    if (!layer || !bimReady) return;
+    layer.visible = mapFilters["bim"] !== false && !isImmersiveActive;
+    const model = getAirportConfig(activeAirport).model;
+    const xray = bimXray || cutAwayFloor !== null;
+    layer.graphics.forEach((g) => {
+      const cutAway =
+        cutAwayFloor !== null && g.attributes.elevation > cutAwayFloor + 0.01;
+      g.visible = !hiddenStoreys.includes(g.attributes.storeyId) && !cutAway;
+      if (model)
+        g.symbol = buildBimSymbol(g.attributes.href, model.heading, xray);
+    });
+  }, [
+    mapFilters,
+    isImmersiveActive,
+    hiddenStoreys,
+    bimXray,
+    bimReady,
+    activeAirport,
+    buildBimSymbol,
+    cutAwayFloor,
+  ]);
+
+  // --- Camera commands from toolbar / inspector ---
+  useEffect(
+    () =>
+      onMapCommand((command) => {
+        const view = viewRef.current;
+        if (!view || view.destroyed || !view.ready) return;
+        const airport = getAirportConfig(
+          useAirportStore.getState().activeAirport,
+        );
+        const animate = { duration: 900, easing: "ease-in-out" as const };
+        switch (command.type) {
+          case "home":
+            view.goTo(homeCamera(airport), animate).catch(() => undefined);
+            break;
+          case "zoom":
+            view
+              .goTo({ zoom: view.zoom + command.delta }, { duration: 300 })
+              .catch(() => undefined);
+            break;
+          case "toggle-tilt":
+            view
+              .goTo(
+                { center: view.center, tilt: view.camera.tilt > 10 ? 0 : 60 },
+                animate,
+              )
+              .catch(() => undefined);
+            break;
+          case "north":
+            view
+              .goTo({ center: view.center, heading: 0 }, animate)
+              .catch(() => undefined);
+            break;
+          case "focus-selection":
+            focusSelection(900);
+            break;
+        }
+      }),
+    [focusSelection],
+  );
 
   // Handle Switch Airport Event smoothly without tearing down the map
   useEffect(() => {
     const handleSwitchAirport = (e: CustomEvent) => {
-      const { coords } = e.detail;
-      if (viewRef.current && !viewRef.current.destroyed) {
-        viewRef.current.goTo(
-          {
-            center: [coords[0], coords[1]],
-            zoom: 15,
-            tilt: 60,
-          },
-          { duration: 2500, easing: "ease-in-out" },
-        );
-      }
+      const view = viewRef.current;
+      if (!view || view.destroyed) return;
+      const airport = getAirportConfig(e.detail.facilityId);
+      view
+        .goTo(homeCamera(airport), { duration: 2000, easing: "ease-in-out" })
+        .catch(() => undefined);
     };
     window.addEventListener(
       "switch-airport",
@@ -779,57 +870,57 @@ export function ArcGISMap() {
       );
   }, []);
 
-  // CAMERA ZOOM CONTROLLER
+  // --- Camera: fly once per sensor selection (sensors never move) ---
   useEffect(() => {
-    if (!isMapReady || !viewRef.current || isImmersiveActive) return;
-
-    if (selectedEntityId && selectedEntityType === "sensor" && focusedSensor) {
-      const coords = getOffsetCoords(focusedSensor);
-      viewRef.current.goTo(
-        {
-          center: [coords.lon, coords.lat],
-          zoom: 19,
-          tilt: 75,
-          heading: 0,
-        },
-        { duration: 1500, easing: "ease-in-out" },
-      );
-    } else if (selectedEntityId && selectedEntityType === "plane") {
-      const plane = planes.find((p) => p.id === selectedEntityId);
-      if (plane) {
-        viewRef.current.goTo(
-          {
-            center: [getLon(plane), getLat(plane)],
-            zoom: 20,
-            tilt: 60,
-          },
-          { duration: 1500, easing: "ease-in-out" },
-        );
-      }
-    } else if (selectedEntityId && selectedEntityType === "vehicle") {
-      const vehicle = vehicles.find((v) => v.id === selectedEntityId);
-      if (vehicle) {
-        viewRef.current.goTo(
-          {
-            center: [getLon(vehicle), getLat(vehicle)],
-            zoom: 21,
-            tilt: 65,
-          },
-          { duration: 1500, easing: "ease-in-out" },
-        );
-      }
-    }
+    if (!isMapReady || isImmersiveActive) return;
+    if (!selectedEntityId || selectedEntityType !== "sensor") return;
+    focusSelection(1500);
   }, [
     selectedEntityId,
     selectedEntityType,
     isImmersiveActive,
     isMapReady,
-    focusedSensor,
-    planes,
-    vehicles,
+    focusSelection,
   ]);
 
-  // IMMERSIVE NATIVE 3D HEATMAP ENGINE
+  // --- Camera: follow the selected plane / vehicle as it moves ---
+  useEffect(() => {
+    if (!isMapReady || isImmersiveActive || !selectedEntityId) return;
+    if (selectedEntityType !== "plane" && selectedEntityType !== "vehicle")
+      return;
+    focusSelection(1500);
+  }, [
+    selectedEntityId,
+    selectedEntityType,
+    isImmersiveActive,
+    isMapReady,
+    planes,
+    vehicles,
+    focusSelection,
+  ]);
+
+  // --- View padding: keep the focus inside the part of the map that is not covered ---
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || view.destroyed || !isMapReady) return;
+    view.padding = {
+      left: occlusion.left,
+      right: occlusion.right,
+      top: 0,
+      bottom: 0,
+    };
+    // Re-frame the selection when overlays open or close beside it
+    if (selectedEntityId && !isImmersiveActive) focusSelection(600);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    occlusion.left,
+    occlusion.right,
+    isMapReady,
+    selectedEntityType,
+    selectedEntityId,
+  ]);
+
+  // --- Immersive heatmap (built once per target, values pushed by the next effect) ---
   useEffect(() => {
     if (
       !isMapReady ||
@@ -843,91 +934,61 @@ export function ArcGISMap() {
     )
       return;
 
+    const map = mapInstanceRef.current;
+    const toggleBuildings = (layers: Collection<Layer>, visible: boolean) => {
+      layers.forEach((l: Layer) => {
+        if (
+          l.type === "scene" ||
+          l.type === "building-scene" ||
+          l.title?.toLowerCase().includes("building")
+        ) {
+          l.visible = visible;
+        }
+      });
+    };
+
     if (isImmersiveActive && focusedSensor) {
       if (footprintLayerRef.current) footprintLayerRef.current.visible = true;
-
       const targetType = focusedSensor.type;
       const allSensors = useAirportStore.getState().sensors;
+      const placements = placementsFor(allSensors);
       const relevantSensors = allSensors.filter(
-        (s) => s.type === targetType && getLon(s) !== 0,
+        (s) => s.type === targetType && placements.has(s.id),
       );
 
-      const map = mapInstanceRef.current;
-      if (map && map.basemap) {
-        const toggleBuildings = (
-          layers: Collection<Layer>,
-          visible: boolean,
-        ) => {
-          layers.forEach((l: Layer) => {
-            if (
-              l.type === "scene" ||
-              l.type === "building-scene" ||
-              l.title?.toLowerCase().includes("building")
-            ) {
-              l.visible = visible;
-            }
-          });
-        };
+      if (map?.basemap) {
         toggleBuildings(map.basemap.baseLayers, false);
         toggleBuildings(map.basemap.referenceLayers, false);
       }
-
-      if (heatmapLayerRef.current)
-        mapInstanceRef.current?.remove(heatmapLayerRef.current);
+      if (heatmapLayerRef.current) map?.remove(heatmapLayerRef.current);
 
       const isTarmac =
         targetType === "TARMAC_TEMP" || targetType === "WIND_OUTDOOR";
-      const isVVTS = activeAirport === "VVTS";
+      const airport = getAirportConfig(activeAirport);
+      const targetBlueprint: number[][][] = (
+        isTarmac ? airport.runwayAreas : airport.terminalAreas
+      ).map(toRing);
 
-      let targetBlueprint: number[][][] = [];
-
-      if (isVVTS) {
-        targetBlueprint = isTarmac
-          ? [
-              TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25R_07L.area.map((p) => [
-                p.lng,
-                p.lat,
-              ]),
-              TAN_SON_NHAT_COORDS.RUNWAYS.RWY_25L_07R.area.map((p) => [
-                p.lng,
-                p.lat,
-              ]),
-            ]
-          : [
-              TAN_SON_NHAT_COORDS.TERMINALS.DOMESTIC.area.map((p) => [
-                p.lng,
-                p.lat,
-              ]),
-              TAN_SON_NHAT_COORDS.TERMINALS.INTERNATIONAL.area.map((p) => [
-                p.lng,
-                p.lat,
-              ]),
-            ];
-      } else {
-        targetBlueprint = isTarmac
-          ? [LONG_THANH_COORDS.RUNWAYS.MAIN.area.map((p) => [p.lng, p.lat])]
-          : [LONG_THANH_COORDS.TERMINALS.MAIN.area.map((p) => [p.lng, p.lat])];
-      }
-
+      // Stencil covering the surroundings of the active airport (~50 km each way)
+      const { lng: cLng, lat: cLat } = airport.center;
       const outerRing = [
-        [106.0, 11.2],
-        [107.5, 11.2],
-        [107.5, 10.5],
-        [106.0, 10.5],
-        [106.0, 11.2],
+        [cLng - 0.5, cLat + 0.5],
+        [cLng + 0.5, cLat + 0.5],
+        [cLng + 0.5, cLat - 0.5],
+        [cLng - 0.5, cLat - 0.5],
+        [cLng - 0.5, cLat + 0.5],
       ];
-
-      const rings = [outerRing];
-      targetBlueprint.forEach((bp) => {
-        rings.push([...bp].reverse());
-      });
+      const rings = [
+        outerRing,
+        ...targetBlueprint.map((bp) => [...bp].reverse()),
+      ];
 
       maskLayerRef.current.removeAll();
       maskLayerRef.current.add(
         new GraphicRef.current({
           geometry: new PolygonRef.current({ rings }),
           symbol: new SimpleFillRef.current({
-            color: [247, 247, 248, 1],
+            color: [236, 238, 241, 1],
             outline: { color: [100, 116, 139, 1], width: 2, style: "solid" },
           }),
         }),
@@ -935,11 +996,11 @@ export function ArcGISMap() {
       maskLayerRef.current.visible = true;
 
       const graphics = relevantSensors.map((s, i) => {
-        const coords = getOffsetCoords(s);
+        const p = placements.get(s.id)!;
         return new GraphicRef.current!({
           geometry: new PointRef.current!({
-            longitude: coords.lon,
-            latitude: coords.lat,
+            longitude: p.lon,
+            latitude: p.lat,
             spatialReference: { wkid: 4326 },
           }),
           attributes: { ObjectID: i, value: s.currentValue },
@@ -960,8 +1021,8 @@ export function ArcGISMap() {
           field: "value",
           colorStops: [
             { ratio: 0, color: "rgba(0,0,0,0)" },
-            { ratio: 0.5, color: "rgba(255,0,0,0.5)" },
-            { ratio: 1, color: "rgba(255,0,0,1)" },
+            { ratio: 0.5, color: "rgba(208,59,59,0.5)" },
+            { ratio: 1, color: "rgba(208,59,59,1)" },
           ],
           radius: 112,
         }),
@@ -969,147 +1030,176 @@ export function ArcGISMap() {
       });
 
       heatmapLayerRef.current = layer;
-      mapInstanceRef.current?.add(layer);
-
-      const targetGeometry = new PolygonRef.current!({
-        rings: [targetBlueprint[0]],
-        spatialReference: { wkid: 4326 },
-      });
+      heatmapSensorIdsRef.current = relevantSensors.map((s) => s.id);
+      map?.add(layer);
 
       viewRef.current?.goTo(
-        { target: targetGeometry, tilt: 50, zoom: isTarmac ? 15.5 : 16.5 },
+        {
+          target: new PolygonRef.current!({
+            rings: [targetBlueprint[0]],
+            spatialReference: { wkid: 4326 },
+          }),
+          tilt: 50,
+          zoom: isTarmac ? 15.5 : 16.5,
+        },
         { duration: 1500, easing: "ease-in-out" },
       );
     } else {
       if (footprintLayerRef.current) footprintLayerRef.current.visible = false;
       if (maskLayerRef.current) maskLayerRef.current.visible = false;
-
-      const map = mapInstanceRef.current;
-      if (map && map.basemap) {
-        const toggleBuildings = (
-          layers: Collection<Layer>,
-          visible: boolean,
-        ) => {
-          layers.forEach((l: Layer) => {
-            if (
-              l.type === "scene" ||
-              l.type === "building-scene" ||
-              l.title?.toLowerCase().includes("building")
-            ) {
-              l.visible = visible;
-            }
-          });
-        };
+      if (map?.basemap) {
         toggleBuildings(map.basemap.baseLayers, true);
         toggleBuildings(map.basemap.referenceLayers, true);
       }
-
       if (heatmapLayerRef.current) {
-        mapInstanceRef.current?.remove(heatmapLayerRef.current);
+        map?.remove(heatmapLayerRef.current);
         heatmapLayerRef.current = null;
+        heatmapSensorIdsRef.current = [];
       }
     }
-  }, [
-    isImmersiveActive,
-    focusedSensor?.type,
-    isMapReady,
-    sensors,
-    activeAirport,
-  ]);
+    // Live values are pushed by the effect below; rebuilding (and re-flying the camera)
+    // only happens when the immersive target changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isImmersiveActive, focusedSensor?.type, isMapReady, activeAirport]);
 
-  // SENSOR LOOP
+  // --- Immersive heatmap live values (in-place edits instead of recreating the layer) ---
   useEffect(() => {
-    if (!isMapReady || !sensorLayerRef.current) return;
+    const layer = heatmapLayerRef.current;
+    const GraphicClass = GraphicRef.current;
+    if (!layer || !GraphicClass || heatmapEditPendingRef.current) return;
+    const sensorsById = new Map(sensors.map((s) => [s.id, s]));
+    const updateFeatures = heatmapSensorIdsRef.current.flatMap((id, i) => {
+      const sensor = sensorsById.get(id);
+      return sensor
+        ? [
+            new GraphicClass({
+              attributes: { ObjectID: i, value: sensor.currentValue },
+            }),
+          ]
+        : [];
+    });
+    if (updateFeatures.length === 0) return;
+    heatmapEditPendingRef.current = true;
+    layer
+      .applyEdits({ updateFeatures })
+      .catch(() => undefined)
+      .finally(() => {
+        heatmapEditPendingRef.current = false;
+      });
+  }, [sensors]);
 
+  // --- Sensor value columns ---
+  // Track: full-scale translucent cylinder. Fill: reading within the type's range,
+  // coloured by health. A selected sensor dims the others instead of hiding them.
+  useEffect(() => {
+    const sensorLayer = sensorLayerRef.current;
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
     const PointSymbol3DClass = PointSymbol3DRef.current;
     const ObjectSymbol3DLayerClass = ObjectSymbol3DLayerRef.current;
-    const ColorClass = ColorRef.current;
     if (
+      !isMapReady ||
+      !sensorLayer ||
       !PointClass ||
       !GraphicClass ||
       !PointSymbol3DClass ||
-      !ObjectSymbol3DLayerClass ||
-      !ColorClass
+      !ObjectSymbol3DLayerClass
     )
       return;
 
-    const currentSensorIds = new Set(sensors.map((s) => s.id));
+    const placements = placementsFor(sensors);
+    const rendered = sensorGraphicsRef.current;
+    const visibleIds = new Set<string>();
+    const toAdd: Graphic[] = [];
+    const focusSensorId =
+      selectedEntityType === "sensor" ? selectedEntityId : null;
 
-    const toRemove = sensorLayerRef.current.graphics.filter((g) => {
-      const isAnotherSelected =
-        selectedEntityType === "sensor" &&
-        !!selectedEntityId &&
-        selectedEntityId !== g.attributes.id;
-
-      const filterType = g.attributes.filterType;
-
-      return Boolean(
-        !currentSensorIds.has(g.attributes.id) ||
-        mapFilters[filterType] === false ||
-        mapFilters[`cylinders_${filterType}`] === false ||
-        isAnotherSelected,
-      );
-    });
-
-    if (toRemove.length > 0)
-      sensorLayerRef.current.removeMany(toRemove.toArray());
-
-    sensors.forEach((sensor) => {
-      const isAnotherSelected =
-        selectedEntityType === "sensor" &&
-        !!selectedEntityId &&
-        selectedEntityId !== sensor.id;
-
-      if (mapFilters[sensor.type] === false || isAnotherSelected) return;
-      if (mapFilters[`cylinders_${sensor.type}`] === false) return;
-
-      const colProps = getSensorColumnProps(sensor.type, sensor.currentValue);
-      const dynamicHeight = Math.max(colProps.height, 10);
-      const coords = getOffsetCoords(sensor);
-
-      const symbol3D = new PointSymbol3DClass({
+    const buildSymbol = (
+      p: SensorPlacement,
+      fraction: number,
+      rgb: [number, number, number],
+      dim: boolean,
+    ) =>
+      new PointSymbol3DClass({
         symbolLayers: [
           new ObjectSymbol3DLayerClass({
             resource: { primitive: "cylinder" },
-            material: { color: new ColorClass(colProps.color) },
-            width: 10,
-            height: dynamicHeight,
+            material: { color: [148, 163, 184, dim ? 0.1 : 0.32] },
+            width: p.columnWidth,
+            depth: p.columnWidth,
+            height: p.columnHeight,
+            anchor: "bottom",
+          }),
+          new ObjectSymbol3DLayerClass({
+            resource: { primitive: "cylinder" },
+            material: { color: [...rgb, dim ? 0.2 : 0.95] },
+            width: p.columnWidth * 0.7,
+            depth: p.columnWidth * 0.7,
+            height: Math.max(p.columnHeight * fraction, p.columnHeight * 0.04),
             anchor: "bottom",
           }),
         ],
       });
 
-      const existingGraphic = sensorLayerRef.current!.graphics.find(
-        (g) => g.attributes.id === sensor.id,
-      );
+    sensors.forEach((sensor) => {
+      if (
+        mapFilters[sensor.type] === false ||
+        mapFilters[`cylinders_${sensor.type}`] === false
+      )
+        return;
+      const p = placements.get(sensor.id);
+      if (!p) return;
+      visibleIds.add(sensor.id);
 
-      if (existingGraphic) {
-        existingGraphic.geometry = new PointClass({
-          longitude: coords.lon,
-          latitude: coords.lat,
-          spatialReference: { wkid: 4326 },
-        });
-        existingGraphic.symbol = symbol3D;
+      const health = getSensorHealth(
+        sensor.type,
+        sensor.currentValue,
+        sensor.status,
+      );
+      // 2% steps: finer changes are invisible but would rebuild the symbol every tick
+      const fraction =
+        Math.round(
+          normalizeSensorValue(sensor.type, sensor.currentValue) * 50,
+        ) / 50;
+      const dim = !!focusSensorId && focusSensorId !== sensor.id;
+      const key = `${fraction}|${health}|${dim}`;
+
+      const existing = rendered.get(sensor.id);
+      if (existing?.key === key) return;
+      const symbol = buildSymbol(p, fraction, HEALTH_STYLES[health].rgb, dim);
+
+      if (existing) {
+        existing.graphic.symbol = symbol;
+        existing.key = key;
       } else {
-        sensorLayerRef.current!.add(
-          new GraphicClass({
-            geometry: new PointClass({
-              longitude: coords.lon,
-              latitude: coords.lat,
-              spatialReference: { wkid: 4326 },
-            }),
-            symbol: symbol3D,
-            attributes: {
-              id: sensor.id,
-              type: "sensor",
-              filterType: sensor.type,
-            },
+        const graphic = new GraphicClass({
+          geometry: new PointClass({
+            longitude: p.lon,
+            latitude: p.lat,
+            z: p.z,
+            spatialReference: { wkid: 4326 },
           }),
-        );
+          symbol,
+          attributes: {
+            id: sensor.id,
+            type: "sensor",
+            filterType: sensor.type,
+          },
+        });
+        rendered.set(sensor.id, { graphic, key });
+        toAdd.push(graphic);
       }
     });
+
+    const toRemove: Graphic[] = [];
+    for (const [id, entry] of rendered) {
+      if (!visibleIds.has(id)) {
+        toRemove.push(entry.graphic);
+        rendered.delete(id);
+      }
+    }
+    if (toRemove.length > 0) sensorLayer.removeMany(toRemove);
+    if (toAdd.length > 0) sensorLayer.addMany(toAdd);
 
     if (viewRef.current) syncTooltips(viewRef.current);
   }, [
@@ -1119,15 +1209,15 @@ export function ArcGISMap() {
     syncTooltips,
     selectedEntityId,
     selectedEntityType,
+    placementsFor,
   ]);
 
-  // PLANES LOOP
+  // --- Aircraft ---
   useEffect(() => {
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
     const PictureMarkerClass = PictureMarkerRef.current;
     const PolylineClass = PolylineRef.current;
-
     if (
       !planeLayerRef.current ||
       !pathLayerRef.current ||
@@ -1158,26 +1248,14 @@ export function ArcGISMap() {
         return;
       }
 
-      const statusStr = (plane.status || "UNKNOWN").toUpperCase();
-      const originStr = (plane.origin || "").toUpperCase();
-
-      const isHomeOrigin = HOME_ORIGINS.some((kw) => originStr.includes(kw));
-
-      let isOutbound = false;
-      if (OUTBOUND_STATUSES.includes(statusStr)) isOutbound = true;
-      else if (INBOUND_STATUSES.includes(statusStr)) isOutbound = false;
-      else isOutbound = isHomeOrigin;
-
+      const outbound = isPlaneOutbound(plane);
       const planeGeom = new PointClass({
         longitude: getLon(plane),
         latitude: getLat(plane),
         spatialReference: { wkid: 4326 },
       });
-
-      const direction = isOutbound ? "outbound" : "inbound";
-      const baseHeading =
-        direction === "inbound" ? plane.heading + 180 : plane.heading;
-      const visualHeading = baseHeading - cameraHeading;
+      const visualHeading =
+        (outbound ? plane.heading : plane.heading + 180) - cameraHeading;
 
       if (existingPlane) {
         existingPlane.geometry = planeGeom;
@@ -1203,62 +1281,53 @@ export function ArcGISMap() {
 
       if (plane.logoUrl) {
         const proxiedLogoUrl = `https://wsrv.nl/?url=${encodeURIComponent(plane.logoUrl)}&w=64&h=64&output=png`;
-
+        const logoSymbol = () =>
+          new PictureMarkerClass({
+            url: proxiedLogoUrl,
+            width: "40px",
+            height: "40px",
+            yoffset: 35,
+            xoffset: -6,
+          });
         if (existingLogo) {
           existingLogo.geometry = planeGeom;
-          const currentSymbol = existingLogo.symbol as PictureMarkerSymbol;
-
-          if (currentSymbol && currentSymbol.url !== proxiedLogoUrl) {
-            existingLogo.symbol = new PictureMarkerClass({
-              url: proxiedLogoUrl,
-              width: "40px",
-              height: "40px",
-              yoffset: 35,
-              xoffset: -6,
-            });
-          }
-        } else if (PictureMarkerClass) {
+          if (
+            (existingLogo.symbol as PictureMarkerSymbol)?.url !== proxiedLogoUrl
+          )
+            existingLogo.symbol = logoSymbol();
+        } else {
           airlineLabelLayerRef.current?.add(
             new GraphicClass({
               geometry: planeGeom,
-              symbol: new PictureMarkerClass({
-                url: proxiedLogoUrl,
-                width: "40px",
-                height: "40px",
-                yoffset: 35,
-                xoffset: -6,
-              }),
+              symbol: logoSymbol(),
               attributes: { id: `${plane.id}_logo`, type: "label" },
             }),
           );
         }
       }
 
-      const isMovingOnGround = GROUND_STATUSES.includes(statusStr);
-      const isAtGroundLevel = plane.altitude < 50;
-      const isValidCoordinate = getLon(plane) !== 0 && getLat(plane) !== 0;
-
-      if (
-        isMovingOnGround &&
-        isAtGroundLevel &&
-        isValidCoordinate &&
+      const statusStr = (plane.status || "UNKNOWN").toUpperCase();
+      const showPath =
+        GROUND_STATUSES.includes(statusStr) &&
+        plane.altitude < 50 &&
+        getLon(plane) !== 0 &&
+        getLat(plane) !== 0 &&
         plane.path &&
-        plane.path.length > 1
-      ) {
-        const pathCoords = plane.path.map((pt) => [pt.longitude, pt.latitude]);
+        plane.path.length > 1;
+
+      if (showPath) {
+        const pathCoords = plane.path!.map((pt) => [pt.longitude, pt.latitude]);
         if (existingPath) {
           existingPath.geometry = new PolylineClass({ paths: [pathCoords] });
         } else {
-          const LineClass = LineRef.current!;
-          const ColorClass = ColorRef.current!;
-          const trailColor =
-            direction === "inbound" ? [6, 182, 212, 1] : [217, 70, 239, 1];
           pathLayerRef.current?.add(
             new GraphicClass({
               geometry: new PolylineClass({ paths: [pathCoords] }),
-              symbol: new LineClass({
+              symbol: new LineRef.current!({
                 style: "solid",
-                color: new ColorClass(trailColor),
+                color: new ColorRef.current!(
+                  outbound ? [217, 70, 239, 1] : [6, 182, 212, 1],
+                ),
                 width: 4,
               }),
               attributes: { planeId: plane.id, type: "path" },
@@ -1271,12 +1340,11 @@ export function ArcGISMap() {
     });
   }, [planes, mapFilters, isMapReady]);
 
-  // ✅ UPDATED VEHICLES LOOP FOR CIVILIAN TRAFFIC
+  // --- Landside vehicles ---
   useEffect(() => {
     const PointClass = PointRef.current;
     const GraphicClass = GraphicRef.current;
     const PictureMarkerClass = PictureMarkerRef.current;
-
     if (!vehicleLayerRef.current || !viewRef.current?.ready || !isMapReady)
       return;
     if (!PointClass || !GraphicClass || !PictureMarkerClass) return;
@@ -1287,8 +1355,6 @@ export function ArcGISMap() {
       const existingVehicle = vehicleLayerRef.current?.graphics.find(
         (g) => g.attributes.id === vehicle.id,
       );
-
-      // Hide vehicles if filtered out or explicitly exiting the airport perimeter
       if (mapFilters["vehicles"] === false || vehicle.status === "EXITING") {
         if (existingVehicle) vehicleLayerRef.current?.remove(existingVehicle);
         return;
@@ -1299,10 +1365,7 @@ export function ArcGISMap() {
         latitude: getLat(vehicle),
         spatialReference: { wkid: 4326 },
       });
-
       const visualHeading = (vehicle.heading || 0) - cameraHeading;
-
-      // ✅ Dynamically map civilian vehicle types to corresponding icons
       let iconUrl = "/car.svg";
       if (vehicle.type === "TAXI") iconUrl = "/taxi.svg";
       else if (vehicle.type === "RIDE_HAIL") iconUrl = "/ride-hail.svg";
@@ -1313,12 +1376,7 @@ export function ArcGISMap() {
         if (existingVehicle.symbol) {
           const symbol = existingVehicle.symbol.clone() as PictureMarkerSymbol;
           symbol.angle = visualHeading;
-
-          // Re-assign url smoothly if type payload changes on the fly
-          if (symbol.url !== iconUrl) {
-            symbol.url = iconUrl;
-          }
-
+          if (symbol.url !== iconUrl) symbol.url = iconUrl;
           existingVehicle.symbol = symbol;
         }
       } else {
@@ -1339,332 +1397,10 @@ export function ArcGISMap() {
   }, [vehicles, mapFilters, isMapReady]);
 
   return (
-    <>
-      <div
-        id="map-container"
-        ref={mapContainerRef}
-        className="absolute inset-0 w-full h-full"
-        style={{ background: "#f7f7f8" }}
-        data-cursor="zoom"
-      />
-
-      {!isImmersiveActive && (
-        <>
-          <div className="absolute bottom-8 left-6 z-40 pointer-events-auto flex flex-col items-start">
-            <AnimatePresence>
-              {isBasemapMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  className="mb-3 w-56 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-xl overflow-hidden flex flex-col origin-bottom-left"
-                >
-                  <div className="bg-gray-50/80 p-2.5 border-b border-gray-200/60 flex items-center gap-2">
-                    <Layers size={14} className="text-[#1e3a8a]" />
-                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                      Topology Matrix
-                    </span>
-                  </div>
-                  <div className="p-1 max-h-64 overflow-y-auto custom-scrollbar flex flex-col">
-                    {BASEMAP_OPTIONS.map((option) => {
-                      const Icon = option.icon;
-                      const isActive = currentBasemap === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          onClick={() => handleBasemapChange(option.id)}
-                          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${isActive ? "bg-[#1e3a8a] text-white shadow-sm" : "text-gray-600 hover:bg-gray-100/80 hover:text-gray-900"}`}
-                        >
-                          <Icon
-                            size={14}
-                            className={isActive ? "opacity-100" : "opacity-60"}
-                          />
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <motion.button
-              whileHover={{ scale: 1.04 }}
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setIsBasemapMenuOpen(!isBasemapMenuOpen)}
-              className={`flex items-center justify-center p-3.5 rounded-2xl shadow-lg border transition-all ${isBasemapMenuOpen ? "bg-[#1e3a8a] text-white border-[#1e3a8a]" : "bg-white/95 backdrop-blur-md text-gray-700 border-gray-200/80 hover:bg-gray-50 hover:text-[#1e3a8a]"}`}
-            >
-              <Layers size={20} />
-            </motion.button>
-          </div>
-
-          <div className="absolute bottom-8 right-[20px] z-40 pointer-events-auto flex flex-col items-end">
-            <AnimatePresence>
-              {isFilterMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  className="mb-3 w-72 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-xl overflow-hidden flex flex-col origin-bottom-right"
-                >
-                  <div className="bg-gray-50/80 p-2.5 border-b border-gray-200/60 flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-2">
-                      <Filter size={14} className="text-[#1e3a8a]" />
-                      <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                        Map Filters
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setIsFilterMenuOpen(false)}
-                      className="text-gray-400 hover:text-gray-700"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-
-                  <div className="p-2 max-h-[70vh] overflow-y-auto custom-scrollbar flex flex-col gap-1">
-                    {/* PLANES SECTION */}
-                    <div className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-gray-50">
-                      <span className="flex items-center gap-2 truncate uppercase text-[10px] tracking-widest text-gray-700">
-                        <Navigation size={12} className="text-[#1e3a8a]" />{" "}
-                        Planes
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          title="Toggle Plane Tooltips"
-                          onClick={() => toggleMapFilter("tooltips_planes")}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {mapFilters["tooltips_planes"] !== false ? (
-                            <MessageSquare
-                              size={14}
-                              className="text-[#1e3a8a]"
-                            />
-                          ) : (
-                            <MessageSquareOff
-                              size={14}
-                              className="text-gray-300"
-                            />
-                          )}
-                        </button>
-                        <button
-                          title="Toggle Plane Visibility"
-                          onClick={() => toggleMapFilter("planes")}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {mapFilters["planes"] !== false ? (
-                            <Eye size={14} className="text-[#1e3a8a]" />
-                          ) : (
-                            <EyeOff size={14} className="text-gray-300" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* VEHICLES SECTION - UI Updated for Civilian Traffic */}
-                    <div className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-gray-50">
-                      <span className="flex items-center gap-2 truncate uppercase text-[10px] tracking-widest text-gray-700">
-                        <Car size={12} className="text-amber-500" /> Civilian
-                        Traffic
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          title="Toggle Vehicle Tooltips"
-                          onClick={() => toggleMapFilter("tooltips_vehicles")}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {mapFilters["tooltips_vehicles"] !== false ? (
-                            <MessageSquare
-                              size={14}
-                              className="text-[#1e3a8a]"
-                            />
-                          ) : (
-                            <MessageSquareOff
-                              size={14}
-                              className="text-gray-300"
-                            />
-                          )}
-                        </button>
-                        <button
-                          title="Toggle Vehicle Visibility"
-                          onClick={() => toggleMapFilter("vehicles")}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {mapFilters["vehicles"] !== false ? (
-                            <Eye size={14} className="text-[#1e3a8a]" />
-                          ) : (
-                            <EyeOff size={14} className="text-gray-300" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* SENSORS HEADER SECTION */}
-                    <div
-                      className={`mt-2 border-t border-gray-100 flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${allSensorsVisible ? "bg-blue-50" : "hover:bg-gray-50"}`}
-                    >
-                      <button
-                        onClick={() => setIsSensorsExpanded(!isSensorsExpanded)}
-                        className={`flex items-center gap-2 flex-1 text-xs font-bold ${allSensorsVisible ? "text-[#1e3a8a]" : "text-gray-500"}`}
-                      >
-                        {isSensorsExpanded ? (
-                          <ChevronDown size={14} />
-                        ) : (
-                          <ChevronRight size={14} />
-                        )}
-                        <span className="truncate uppercase text-[10px] tracking-widest">
-                          Sensors
-                        </span>
-                      </button>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          title="Toggle All Sensor Cylinders"
-                          onClick={handleToggleAllSensorCylinders}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          <BarChart2
-                            size={14}
-                            className={
-                              allSensorCylindersVisible
-                                ? "text-[#1e3a8a]"
-                                : "text-gray-300"
-                            }
-                          />
-                        </button>
-                        <button
-                          title="Toggle All Sensor Tooltips"
-                          onClick={handleToggleAllSensorTooltips}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {allSensorTooltipsVisible ? (
-                            <MessageSquare
-                              size={14}
-                              className="text-[#1e3a8a]"
-                            />
-                          ) : (
-                            <MessageSquareOff
-                              size={14}
-                              className="text-gray-300"
-                            />
-                          )}
-                        </button>
-                        <button
-                          title="Toggle All Sensor Visibility"
-                          onClick={handleToggleAllSensors}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        >
-                          {allSensorsVisible ? (
-                            <Eye size={14} className="text-[#1e3a8a]" />
-                          ) : (
-                            <EyeOff size={14} className="text-gray-300" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* EXPANDED INDIVIDUAL SENSORS LIST */}
-                    <AnimatePresence>
-                      {isSensorsExpanded && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          className="flex flex-col gap-0.5 overflow-hidden ml-4 pl-2 border-l-2 border-gray-100 mt-1 mb-2"
-                        >
-                          {sensorKeys.map((key) => {
-                            const isVisOn = mapFilters[key] !== false;
-                            const isTooltipOn =
-                              mapFilters[`tooltips_${key}`] !== false;
-                            const isCylinderOn =
-                              mapFilters[`cylinders_${key}`] !== false;
-
-                            return (
-                              <div
-                                key={key}
-                                className="flex items-center justify-between py-1.5 px-2 rounded-xl transition-all hover:bg-gray-50"
-                              >
-                                <span
-                                  className={`text-[9px] font-bold uppercase truncate w-24 ${isVisOn ? "text-gray-700" : "text-gray-400"}`}
-                                >
-                                  {key.replace(/_/g, " ")}
-                                </span>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    title={`Toggle ${key} Cylinders`}
-                                    onClick={() =>
-                                      toggleMapFilter(`cylinders_${key}`)
-                                    }
-                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
-                                  >
-                                    <BarChart2
-                                      size={12}
-                                      className={
-                                        isCylinderOn
-                                          ? "text-[#1e3a8a]"
-                                          : "text-gray-300"
-                                      }
-                                    />
-                                  </button>
-                                  <button
-                                    title={`Toggle ${key} Tooltips`}
-                                    onClick={() =>
-                                      toggleMapFilter(`tooltips_${key}`)
-                                    }
-                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
-                                  >
-                                    {isTooltipOn ? (
-                                      <MessageSquare
-                                        size={12}
-                                        className="text-[#1e3a8a]"
-                                      />
-                                    ) : (
-                                      <MessageSquareOff
-                                        size={12}
-                                        className="text-gray-300"
-                                      />
-                                    )}
-                                  </button>
-                                  <button
-                                    title={`Toggle ${key} Visibility`}
-                                    onClick={() => toggleMapFilter(key)}
-                                    className="p-1 hover:bg-gray-200 rounded transition-colors"
-                                  >
-                                    {isVisOn ? (
-                                      <Eye
-                                        size={12}
-                                        className="text-[#1e3a8a]"
-                                      />
-                                    ) : (
-                                      <EyeOff
-                                        size={12}
-                                        className="text-gray-300"
-                                      />
-                                    )}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <motion.button
-              whileHover={{ scale: 1.04 }}
-              whileTap={{ scale: 0.96 }}
-              onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
-              className={`flex items-center justify-center p-3.5 rounded-2xl shadow-lg border transition-all ${isFilterMenuOpen ? "bg-[#1e3a8a] text-white border-[#1e3a8a]" : "bg-white/95 backdrop-blur-md text-gray-700 border-gray-200/80 hover:bg-gray-50 hover:text-[#1e3a8a]"}`}
-            >
-              <Filter size={20} />
-            </motion.button>
-          </div>
-        </>
-      )}
-    </>
+    <div
+      id="map-container"
+      ref={mapContainerRef}
+      className="absolute inset-0 w-full h-full bg-twin-canvas"
+    />
   );
 }

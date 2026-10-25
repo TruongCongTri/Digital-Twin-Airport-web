@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@arcgis/core/assets/esri/themes/light/main.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
@@ -61,6 +60,20 @@
   --color-status-amber: #f59e0b;
   --color-status-red: #ef4444;
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* BIM workspace tokens (neutral chrome, one accent; status colours live in sensor-meta) */
+  --color-twin-canvas: #eceef1;
+  --color-twin-surface: #ffffff;
+  --color-twin-raised: #f6f7f9;
+  --color-twin-line: #e3e6ea;
+  --color-twin-line-strong: #cdd2d9;
+  --color-twin-ink: #0f172a;
+  --color-twin-ink-2: #475467;
+  --color-twin-ink-3: #8a919c;
+  --color-twin-accent: #1e3a8a;
+  --color-twin-accent-hover: #172f72;
+  --color-twin-accent-soft: #e9eef9;
+  --color-twin-data: #2a78d6;
 }
 
 :root {
@@ -104,8 +117,7 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    cursor: none;
+    font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   html {
     @apply font-sans;
@@ -130,8 +142,8 @@
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -178,8 +190,14 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
-@layer base {
-  * {
-    cursor: none !important;
-  }
+/* Panel scroll areas reserve gutter so content does not shift when it overflows */
+.twin-scroll {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Keep focus visible for keyboard users across the workspace */
+.twin-focus:focus-visible {
+  outline: 2px solid var(--color-twin-accent);
+  outline-offset: 1px;
 }

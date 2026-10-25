@@ -1,8 +1,8 @@
 // Root Layout: Header, Footer, Font, Providers
 import type { Metadata } from "next";
+import { preconnect, prefetchDNS } from "react-dom";
 import { Geist } from "next/font/google";
 import "./globals.css";
-import { CustomCursor } from "@/src/components/CustomCursor";
 import { Toaster } from "@/components/ui/sonner";
 import { AppBootstrapper } from "@/src/components/AppBootstrapper";
 import { QueryProvider } from "@/src/components/providers/QueryProvider";
@@ -14,7 +14,7 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 // config-6 -  Base Metadata & OpenGraph
 export const metadata: Metadata = {
   title: {
-    default: "AeroTwin — Airport Digital Twin", // Trang chủ sẽ có title này
+    default: "AeroTwin — Airport Digital Twin",
     template: "%s |  ", // Khi trang con cài title "Khóa React", nó sẽ ra "Khóa React | Boilerplate Next.js 13"
   },
   description: "Real-time 3D digital twin dashboard for airport operations.",
@@ -31,14 +31,21 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // Warm up connections to the ArcGIS CDN (SDK assets/workers) and basemap tiles
+  // before the lazily loaded map requests them.
+  preconnect("https://js.arcgis.com", { crossOrigin: "anonymous" });
+  preconnect("https://basemaps-api.arcgis.com", { crossOrigin: "anonymous" });
+  prefetchDNS("https://static.arcgis.com");
+  prefetchDNS("https://tiles.arcgis.com");
+  prefetchDNS("https://wsrv.nl");
+
   return (
     <html
       lang="en"
       className={`h-full antialiased font-sans ${geist.variable}`}
     >
       <body className="h-full overflow-hidden">
-        <CustomCursor />
-        <Toaster />
+        <Toaster position="bottom-right" />
         {/* 1. QueryProvider must wrap everything that uses React Query */}
         <QueryProvider>
           {/* 2. AppBootstrapper can now safely use useQuery! */}

@@ -1,62 +1,47 @@
-# ==========================================
-# Phase 1: Dependencies
-# ==========================================
-FROM node:24-alpine AS deps
+# Digital Twin Airport web (Next.js standalone server)
+#
+#   docker build --build-arg NEXT_PUBLIC_API_URL=https://api.example.com/api/v1 -t digital-twin-airport-web .
+#   docker run -p 3000:3000 digital-twin-airport-web
+#
+# NEXT_PUBLIC_API_URL is compiled into the client bundle, so it is a build arg (one image per
+# API endpoint). The socket connects to the same host without the /api/v1 suffix.
+
+ARG NODE_VERSION=24
+
+# --- Dependencies (husky / prepare scripts skipped) ---
+FROM node:${NODE_VERSION}-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund --ignore-scripts
 
-# Copy package files and install (bypassing Husky and audits)
-COPY package.json package-lock.json* ./
-RUN npm ci --no-audit --no-fund --ignore-scripts
-
-# ==========================================
-# Phase 2: Builder
-# ==========================================
-FROM node:24-alpine AS builder
+# --- Build ---
+FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# Add these two lines so Next.js knows where the backend is during build!
 ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
-ENV NODE_OPTIONS="--max-old-space-size=4096"
-
+RUN test -n "$NEXT_PUBLIC_API_URL" \
+  || (echo "ERROR: build arg NEXT_PUBLIC_API_URL is required, e.g. https://api.example.com/api/v1" && exit 1)
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+  NEXT_STANDALONE=1 \
+  NEXT_TELEMETRY_DISABLED=1 \
+  NODE_ENV=production \
+  NODE_OPTIONS=--max-old-space-size=4096
 RUN npm run build
 
-# ==========================================
-# Phase 3: Production Runner
-# ==========================================
-FROM node:24-alpine AS runner
+# --- Runtime: standalone server + static assets (incl. BIM models in public/models) ---
+FROM node:${NODE_VERSION}-alpine AS runner
 WORKDIR /app
-
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Create a secure, non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copy the public folder
-COPY --from=builder /app/public ./public
-
-# Set permissions for the prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Automatically leverage the standalone output traces
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-# Switch to the secure user
-USER nextjs
-
+ENV NODE_ENV=production \
+  NEXT_TELEMETRY_DISABLED=1 \
+  PORT=3000 \
+  HOSTNAME=0.0.0.0
+COPY --from=builder --chown=node:node /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+USER node
 EXPOSE 3000
-
-# Start the server using the standalone bundle
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 CMD ["node", "server.js"]

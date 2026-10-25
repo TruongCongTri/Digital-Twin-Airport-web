@@ -30,14 +30,11 @@ import {
   ReferenceLine,
 } from "recharts";
 import type { VehicleType } from "@/types";
+import { getAirportName } from "@/constants/airports";
+import { DataCard, toDisplayTitle } from "@/src/components/ui-kit";
 
 const boxClass =
-  "bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-sm p-5 pointer-events-auto";
-
-const AIRPORT_NAMES: Record<string, string> = {
-  VVLT: "Long Thanh",
-  VVTS: "Tan Son Nhat",
-};
+  "bg-twin-surface border border-twin-line rounded-lg shadow-sm p-4 pointer-events-auto";
 
 // ✅ VEHICLE BRANDING ENGINE based on VehicleType
 const VEHICLE_THEMES: Record<
@@ -56,7 +53,7 @@ const VEHICLE_THEMES: Record<
     text: "text-white",
     accent: "bg-[#D4AF37]",
   }, // Purple/Gold
-  DEFAULT: { bg: "bg-gray-800", text: "text-white", accent: "bg-blue-500" },
+  DEFAULT: { bg: "bg-twin-ink", text: "text-white", accent: "bg-blue-500" },
 };
 
 // Map tailwind semantic colors to hex for Recharts SVG rendering
@@ -68,17 +65,6 @@ const CHART_COLORS: Record<string, string> = {
   "bg-purple-500": "#a855f7",
   "bg-slate-500": "#64748b",
 };
-
-const FauxBarcode = () => (
-  <div className="flex gap-[3px] items-end h-6 opacity-60 shrink-0">
-    <div className="w-1 h-full bg-gray-800 rounded-sm" />
-    <div className="w-[2px] h-full bg-gray-800 rounded-sm" />
-    <div className="w-1.5 h-full bg-gray-800 rounded-sm" />
-    <div className="w-[2px] h-[80%] bg-gray-800 rounded-sm" />
-    <div className="w-1 h-full bg-gray-800 rounded-sm" />
-    <div className="w-[2px] h-full bg-gray-800 rounded-sm" />
-  </div>
-);
 
 interface DispatchTicketProps {
   title: string;
@@ -94,47 +80,23 @@ interface DispatchTicketProps {
   children: ReactNode;
 }
 
-// ✅ REUSABLE TICKET WRAPPER
+// Analytics card in the workspace style (ui-kit DataCard); legacy props are kept so
+// the module bodies below stay unchanged. `theme` / `footerColor` are no longer used.
 const DispatchTicket = ({
   title,
   tag,
-  icon: Icon,
+  icon,
   footerText,
-  footerColor = "text-gray-500",
-  theme,
   children,
 }: DispatchTicketProps) => (
-  <div className="w-full rounded-2xl flex flex-col shadow-lg border border-gray-200/80 bg-white shrink-0 relative overflow-hidden mt-1 mb-2">
-    <div
-      className={`absolute -left-3 top-[36px] w-6 h-6 bg-[#f7f7f8] rounded-full border-r border-gray-200 z-10 shadow-inner`}
-    />
-    <div
-      className={`absolute -right-3 top-[36px] w-6 h-6 bg-[#f7f7f8] rounded-full border-l border-gray-200 z-10 shadow-inner`}
-    />
-
-    <div
-      className={`${theme.bg} ${theme.text} px-4 py-2.5 flex justify-between items-center relative z-0`}
-    >
-      <span className="font-bold text-[10px] uppercase tracking-widest flex items-center gap-1.5">
-        <Icon size={12} /> {title}
-      </span>
-      <span className="text-[10px] font-mono opacity-80 font-bold tracking-wider">
-        {tag}
-      </span>
-    </div>
-
-    <div className="px-5 py-4 bg-[#fafafa] border-b border-dashed border-gray-300">
-      {children}
-    </div>
-    <div className="bg-white px-4 py-2 flex justify-between items-center">
-      <span
-        className={`text-[10px] font-bold ${footerColor} tracking-widest uppercase`}
-      >
-        {footerText}
-      </span>
-      <FauxBarcode />
-    </div>
-  </div>
+  <DataCard
+    title={title}
+    icon={icon}
+    meta={tag}
+    footer={toDisplayTitle(footerText)}
+  >
+    {children}
+  </DataCard>
 );
 
 export function VehicleFocusPanel() {
@@ -146,7 +108,7 @@ export function VehicleFocusPanel() {
 
   const activeAirport =
     useAirportStore((state) => state.activeAirport) || "VVLT";
-  const currentAirportName = AIRPORT_NAMES[activeAirport] || "Long Thanh";
+  const currentAirportName = getAirportName(activeAirport);
 
   const totalVehicles = vehicles.length;
   const vehicleId = vehicle?.id;
@@ -256,44 +218,39 @@ export function VehicleFocusPanel() {
       <BentoPanel
         direction="left"
         isOpen={true}
-        className="absolute top-20 left-6 w-[380px] z-30 flex flex-col gap-4 h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar pb-4 pr-2 pointer-events-auto"
+        className="absolute top-3 left-3 w-[380px] z-30 flex flex-col gap-4 h-[calc(100vh-100px)] overflow-y-auto twin-scroll pb-4 pr-2 pointer-events-auto"
       >
         {/* TOP CONTROLS */}
-        <div className="flex justify-between items-center w-full bg-white/95 backdrop-blur-md rounded-xl shadow-sm border border-gray-200/80 p-2 shrink-0 sticky top-0 z-50">
+        <div className="flex justify-between items-center w-full bg-twin-surface rounded-lg shadow-sm border border-twin-line p-2 shrink-0 sticky top-0 z-50">
           <div className="flex items-center gap-1">
             <button
               onClick={handlePrev}
-              className="p-1.5 hover:bg-gray-100 rounded-lg transition-all text-gray-500 hover:text-gray-900"
+              className="p-1.5 hover:bg-twin-raised rounded-lg transition-all text-twin-ink-2 hover:text-twin-ink"
             >
               <ChevronLeft size={16} />
             </button>
-            <span className="text-[10px] font-mono font-bold text-gray-500 w-10 text-center select-none tracking-widest">
+            <span className="text-[10px] tabular-nums font-bold text-twin-ink-2 w-10 text-center select-none tracking-wide">
               {currentIndex + 1}/{totalVehicles}
             </span>
             <button
               onClick={handleNext}
-              className="p-1.5 hover:bg-gray-100 rounded-lg transition-all text-gray-500 hover:text-gray-900"
+              className="p-1.5 hover:bg-twin-raised rounded-lg transition-all text-twin-ink-2 hover:text-twin-ink"
             >
               <ChevronRight size={16} />
             </button>
           </div>
           <button
             onClick={clearSelection}
-            className="p-1.5 rounded-full bg-gray-50 hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors border border-gray-100"
+            className="p-1.5 rounded-full bg-twin-raised hover:bg-red-50 text-twin-ink-3 hover:text-red-500 transition-colors border border-twin-line"
           >
             <X size={14} />
           </button>
         </div>
 
         {/* PRIMARY VEHICLE TICKET */}
-        <div className="w-full rounded-2xl flex flex-col shadow-lg border border-gray-200/80 bg-white shrink-0 relative overflow-hidden">
-          <div className="absolute -left-3 top-[56px] w-6 h-6 bg-[#f7f7f8] rounded-full border-r border-gray-200 z-10 shadow-inner" />
-          <div className="absolute -right-3 top-[56px] w-6 h-6 bg-[#f7f7f8] rounded-full border-l border-gray-200 z-10 shadow-inner" />
-
+        <div className="w-full rounded-lg flex flex-col shadow-sm border border-twin-line bg-white shrink-0 relative overflow-hidden">
           {/* Ticket Header */}
-          <div
-            className={`${brandTheme.bg} ${brandTheme.text} px-5 py-3 flex justify-between items-center relative z-0`}
-          >
+          <div className="bg-twin-surface text-twin-ink border-b border-twin-line px-4 py-3 flex justify-between items-center relative z-0">
             <div className="flex items-center gap-3">
               {vehicle.logoUrl ? (
                 <div className="bg-white p-1 rounded-md shadow-sm h-8 w-8 flex items-center justify-center">
@@ -308,46 +265,49 @@ export function VehicleFocusPanel() {
               ) : (
                 <Car size={24} className="opacity-80" />
               )}
-              <span className="font-bold text-xs uppercase tracking-widest opacity-90">
+              <span className="font-bold text-xs uppercase tracking-wide opacity-90">
                 {company}
               </span>
             </div>
             <div
-              className={`text-[10px] font-mono px-2 py-1 rounded shadow-sm ${brandTheme.accent} ${typeStr === "TAXI" ? "text-black" : "text-gray-900"} font-black tracking-wider`}
+              className={`text-[10px] tabular-nums px-2 py-1 rounded shadow-sm bg-twin-accent-soft text-twin-accent font-semibold tracking-wider`}
             >
               {licensePlate}
             </div>
           </div>
 
           {/* Ticket Body */}
-          <div className="px-6 py-5 flex justify-between items-center bg-[#fafafa] border-b border-dashed border-gray-300">
+          <div className="px-6 py-5 flex justify-between items-center bg-twin-raised border-b border-twin-line-strong">
             <div className="text-center w-[30%]">
-              <div className="text-3xl font-black text-gray-800 tracking-tighter">
+              <div className="text-3xl font-semibold text-twin-ink tracking-tight">
                 {origin}
               </div>
-              <div className="text-[9px] text-gray-400 uppercase font-bold tracking-widest mt-1">
+              <div className="text-[10px] text-twin-ink-3 uppercase font-bold tracking-wide mt-1">
                 Origin
               </div>
             </div>
 
             <div className="flex flex-col items-center w-[40%] px-2 relative -top-2">
-              <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+              <div className="text-[10px] font-bold text-twin-ink-3 uppercase tracking-wide mb-1">
                 {typeStr.replace(/_/g, " ")}
               </div>
               <div className="w-full flex items-center relative">
-                <div className="w-1.5 h-1.5 rounded-full border border-gray-300 bg-white z-10" />
-                <div className="flex-1 border-t-2 border-dashed border-gray-300 mx-1" />
-                <CarFront size={16} className="text-gray-400 rotate-90 z-10" />
-                <div className="flex-1 border-t-2 border-dashed border-gray-300 mx-1" />
-                <div className="w-1.5 h-1.5 rounded-full border border-gray-300 bg-[#1e3a8a] z-10" />
+                <div className="w-1.5 h-1.5 rounded-full border border-twin-line-strong bg-white z-10" />
+                <div className="flex-1 border-t-2 border-twin-line-strong mx-1" />
+                <CarFront
+                  size={16}
+                  className="text-twin-ink-3 rotate-90 z-10"
+                />
+                <div className="flex-1 border-t-2 border-twin-line-strong mx-1" />
+                <div className="w-1.5 h-1.5 rounded-full border border-twin-line-strong bg-twin-accent z-10" />
               </div>
             </div>
 
             <div className="text-center w-[30%]">
-              <div className="text-3xl font-black text-gray-800 tracking-tighter">
+              <div className="text-3xl font-semibold text-twin-ink tracking-tight">
                 {dest}
               </div>
-              <div className="text-[9px] text-gray-400 uppercase font-bold tracking-widest mt-1">
+              <div className="text-[10px] text-twin-ink-3 uppercase font-bold tracking-wide mt-1">
                 Dest
               </div>
             </div>
@@ -358,34 +318,33 @@ export function VehicleFocusPanel() {
             <div className="space-y-3 flex-1">
               <div className="flex justify-between items-center pr-6">
                 <div>
-                  <div className="text-[8px] text-gray-400 uppercase tracking-wider font-bold">
+                  <div className="text-[10px] text-twin-ink-3 uppercase tracking-wider font-bold">
                     Vehicle Type
                   </div>
-                  <div className="text-xs font-black text-gray-800 truncate max-w-[80px]">
+                  <div className="text-xs font-semibold text-twin-ink truncate max-w-[80px]">
                     {typeStr.replace(/_/g, " ")}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[8px] text-gray-400 uppercase tracking-wider font-bold">
+                  <div className="text-[10px] text-twin-ink-3 uppercase tracking-wider font-bold">
                     Model
                   </div>
-                  <div className="text-xs font-black text-[#1e3a8a] truncate max-w-[100px]">
+                  <div className="text-xs font-semibold text-twin-accent truncate max-w-[100px]">
                     {model}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[8px] text-gray-400 uppercase tracking-wider font-bold">
+                  <div className="text-[10px] text-twin-ink-3 uppercase tracking-wider font-bold">
                     Status
                   </div>
                   <div
-                    className={`text-[10px] font-black uppercase ${dirColors.text}`}
+                    className={`text-[10px] font-semibold uppercase ${dirColors.text}`}
                   >
                     {statusStr.replace(/_/g, " ")}
                   </div>
                 </div>
               </div>
             </div>
-            <FauxBarcode />
           </div>
         </div>
 
@@ -395,9 +354,9 @@ export function VehicleFocusPanel() {
           onClick={() =>
             window.dispatchEvent(new CustomEvent("recenter-entity"))
           }
-          className={`${boxClass} p-0 h-32 bg-gray-50 hover:bg-gray-100 flex items-center justify-center relative overflow-hidden shrink-0 group transition-colors cursor-none`}
+          className={`${boxClass} p-0 h-32 bg-twin-raised hover:bg-twin-raised flex items-center justify-center relative overflow-hidden shrink-0 group transition-colors cursor-none`}
         >
-          <div className="absolute top-3 left-3 bg-white/90 p-1.5 rounded-full shadow-sm text-gray-500 group-hover:text-[#1e3a8a] group-hover:scale-110 transition-all z-10">
+          <div className="absolute top-3 left-3 bg-twin-surface p-1.5 rounded-full shadow-sm text-twin-ink-2 group-hover:text-twin-accent group-hover:scale-110 transition-all z-10">
             <LocateFixed size={14} strokeWidth={2.5} />
           </div>
 
@@ -410,7 +369,7 @@ export function VehicleFocusPanel() {
           ) : (
             <Car
               size={40}
-              className="text-gray-300 absolute group-hover:scale-110 transition-all duration-500"
+              className="text-twin-ink-3 absolute group-hover:scale-110 transition-all duration-500"
             />
           )}
         </BentoBox>
@@ -427,7 +386,7 @@ export function VehicleFocusPanel() {
             <div className="absolute left-6 right-6 top-1/2 -translate-y-1/2 h-1 bg-gray-200 rounded-full z-0" />
             <div className="absolute left-6 right-6 top-1/2 -translate-y-1/2 flex justify-evenly items-center z-0 pointer-events-none">
               {sequenceSteps.slice(1).map((_, i) => (
-                <ChevronRight key={i} size={14} className="text-gray-300" />
+                <ChevronRight key={i} size={14} className="text-twin-ink-3" />
               ))}
             </div>
 
@@ -448,12 +407,12 @@ export function VehicleFocusPanel() {
                   className="relative z-10 flex flex-col items-center gap-2"
                 >
                   <div
-                    className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-500 bg-[#fafafa] ${
+                    className={`w-5 h-5 rounded-full flex items-center justify-center border-2 transition-all duration-500 bg-twin-raised ${
                       isPast
                         ? `${dirColors.border} ${dirColors.text}`
                         : isActive
                           ? `${dirColors.border} ${dirColors.shadow} animate-pulse`
-                          : "border-gray-300 text-transparent"
+                          : "border-twin-line-strong text-transparent"
                     }`}
                   >
                     {isPast && <Check size={10} strokeWidth={4} />}
@@ -464,8 +423,8 @@ export function VehicleFocusPanel() {
                     )}
                   </div>
                   <span
-                    className={`absolute top-7 text-[8px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                      isActive ? dirColors.text : "text-gray-400"
+                    className={`absolute top-7 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                      isActive ? dirColors.text : "text-twin-ink-3"
                     }`}
                   >
                     {step.label}
@@ -486,27 +445,27 @@ export function VehicleFocusPanel() {
         >
           <div className="space-y-3">
             <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-              <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
+              <span className="text-[10px] text-twin-ink-2 uppercase font-bold tracking-wide block mb-0.5">
                 Outer Perimeter (LPR)
               </span>
-              <span className="text-xs font-bold font-mono text-green-600 tracking-wider">
+              <span className="text-xs font-bold tabular-nums text-green-600 tracking-wider">
                 CLEARED
               </span>
             </div>
             <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-              <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
+              <span className="text-[10px] text-twin-ink-2 uppercase font-bold tracking-wide block mb-0.5">
                 Curbside Drop-off
               </span>
-              <span className="text-xs font-bold font-mono text-green-600 tracking-wider">
+              <span className="text-xs font-bold tabular-nums text-green-600 tracking-wider">
                 AUTH OK
               </span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block mb-0.5">
+              <span className="text-[10px] text-twin-ink-2 uppercase font-bold tracking-wide block mb-0.5">
                 VIP Apron Access
               </span>
               <span
-                className={`text-xs font-bold font-mono tracking-wider ${typeStr === "VIP_TRANSFER" ? "text-green-600" : "text-red-500"}`}
+                className={`text-xs font-bold tabular-nums tracking-wider ${typeStr === "VIP_TRANSFER" ? "text-green-600" : "text-red-500"}`}
               >
                 {typeStr === "VIP_TRANSFER" ? "CLEARED" : "DENIED"}
               </span>
@@ -518,17 +477,17 @@ export function VehicleFocusPanel() {
       <BentoPanel
         direction="right"
         isOpen={true}
-        className="absolute top-20 right-6 w-[400px] z-30 flex flex-col gap-4 h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar pb-4 pl-2 pointer-events-auto"
+        className="absolute top-3 right-3 w-[400px] z-30 flex flex-col gap-4 h-[calc(100vh-100px)] overflow-y-auto twin-scroll pb-4 pl-2 pointer-events-auto"
       >
         {/* RIGHT PANEL HEADER */}
         <BentoBox
           className={`${boxClass} py-3 flex justify-between items-center shrink-0 sticky top-0 z-50`}
         >
-          <h2 className="text-sm font-bold text-gray-800 flex items-center gap-2">
-            <MapPin size={14} className="text-[#1e3a8a]" /> {currentAirportName}{" "}
-            Terminal
+          <h2 className="text-sm font-bold text-twin-ink flex items-center gap-2">
+            <MapPin size={14} className="text-twin-accent" />{" "}
+            {currentAirportName} Terminal
           </h2>
-          <div className="text-[10px] font-black tracking-widest text-[#1e3a8a] bg-blue-50 px-2 py-1 rounded border border-blue-100 uppercase">
+          <div className="text-[10px] font-semibold tracking-wide text-twin-accent bg-blue-50 px-2 py-1 rounded border border-blue-100 uppercase">
             Curbside
           </div>
         </BentoBox>
@@ -543,45 +502,45 @@ export function VehicleFocusPanel() {
           theme={brandTheme}
         >
           <div className="grid grid-cols-4 gap-2">
-            <div className="text-center col-span-2 border-r border-gray-200">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+            <div className="text-center col-span-2 border-r border-twin-line">
+              <div className="text-[10px] text-twin-ink-3 font-bold tracking-wide mb-0.5">
                 LATITUDE
               </div>
-              <div className="text-xs font-bold font-mono text-[#1e3a8a]">
+              <div className="text-xs font-bold tabular-nums text-twin-accent">
                 {vehicle.position.latitude.toFixed(6)}°
               </div>
             </div>
             <div className="text-center col-span-2">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+              <div className="text-[10px] text-twin-ink-3 font-bold tracking-wide mb-0.5">
                 LONGITUDE
               </div>
-              <div className="text-xs font-bold font-mono text-[#1e3a8a]">
+              <div className="text-xs font-bold tabular-nums text-twin-accent">
                 {vehicle.position.longitude.toFixed(6)}°
               </div>
             </div>
 
-            <div className="text-center mt-3 border-t border-gray-200 pt-3">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+            <div className="text-center mt-3 border-t border-twin-line pt-3">
+              <div className="text-[10px] text-twin-ink-3 font-bold tracking-wide mb-0.5">
                 HEADING
               </div>
-              <div className="text-sm font-bold font-mono text-gray-800">
+              <div className="text-sm font-bold tabular-nums text-twin-ink">
                 {Math.floor(vehicle.heading || 0)}°
               </div>
             </div>
-            <div className="text-center mt-3 border-t border-gray-200 pt-3 col-span-2">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+            <div className="text-center mt-3 border-t border-twin-line pt-3 col-span-2">
+              <div className="text-[10px] text-twin-ink-3 font-bold tracking-wide mb-0.5">
                 EST SPEED
               </div>
-              <div className="text-sm font-bold font-mono text-gray-800">
+              <div className="text-sm font-bold tabular-nums text-twin-ink">
                 {Math.floor(vehicle.speed || 0)}{" "}
-                <span className="text-[8px] text-gray-400">KPH</span>
+                <span className="text-[10px] text-twin-ink-3">KPH</span>
               </div>
             </div>
-            <div className="text-center mt-3 border-t border-gray-200 pt-3">
-              <div className="text-[8px] text-gray-400 font-bold tracking-widest mb-0.5">
+            <div className="text-center mt-3 border-t border-twin-line pt-3">
+              <div className="text-[10px] text-twin-ink-3 font-bold tracking-wide mb-0.5">
                 BATTERY
               </div>
-              <div className="text-sm font-bold font-mono text-gray-800 flex items-center justify-center gap-1">
+              <div className="text-sm font-bold tabular-nums text-twin-ink flex items-center justify-center gap-1">
                 <BatteryCharging size={10} className="text-emerald-500" />
                 {vehicle.batteryLevel !== undefined
                   ? `${vehicle.batteryLevel}%`
@@ -601,12 +560,12 @@ export function VehicleFocusPanel() {
           theme={brandTheme}
         >
           <div className="flex justify-between items-center mb-4">
-            <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest block mb-0.5">
+            <span className="text-[10px] text-twin-ink-3 font-bold uppercase tracking-wide block mb-0.5">
               Live Velocity
             </span>
-            <div className="text-lg font-black text-[#1e3a8a]">
+            <div className="text-lg font-semibold text-twin-accent">
               {Math.floor(vehicle.speed || 0)}{" "}
-              <span className="text-[10px] text-gray-400 font-bold tracking-widest">
+              <span className="text-[10px] text-twin-ink-3 font-bold tracking-wide">
                 KPH
               </span>
             </div>

@@ -1,0 +1,53 @@
+{
+  "source": "Vietnam_Green_Airport_Coordination_Revit2024.ifc",
+  "storeys": [
+    {
+      "id": "foundation",
+      "name": "Foundation",
+      "elevation": -1.6,
+      "file": "foundation.glb",
+      "triangles": 12,
+      "bytes": 1004
+    },
+    {
+      "id": "ground",
+      "name": "Ground",
+      "elevation": 0,
+      "file": "ground.glb",
+      "triangles": 1688,
+      "bytes": 24980
+    },
+    {
+      "id": "level-01",
+      "name": "Level 01",
+      "elevation": 4.3,
+      "file": "level-01.glb",
+      "triangles": 2600,
+      "bytes": 36712
+    },
+    {
+      "id": "level-02",
+      "name": "Level 02",
+      "elevation": 11,
+      "file": "level-02.glb",
+      "triangles": 4720,
+      "bytes": 64664
+    },
+    {
+      "id": "level-03",
+      "name": "Level 03",
+      "elevation": 17.3,
+      "file": "level-03.glb",
+      "triangles": 63508,
+      "bytes": 812616
+    },
+    {
+      "id": "tower",
+      "name": "Tower",
+      "elevation": 40,
+      "file": "tower.glb",
+      "triangles": 368,
+      "bytes": 6688
+    }
+  ]
+}

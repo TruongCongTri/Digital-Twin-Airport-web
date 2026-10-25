@@ -1,7 +1,26 @@
+# Never ship local secrets or machine-specific build output into the image.
+# NEXT_PUBLIC_* values are passed as build args (they are compiled into the bundle).
+.env
+.env.*
+!.env.example
+node_modules
+.next
+out
+tsconfig.tsbuildinfo
+
+# Not needed to build or run the app
+.git
+.github
+.husky
+.vscode
+*.log
+plop-templates
+plopfile.js
 Dockerfile
 .dockerignore
-node_modules
-npm-debug.log
 README.md
-.next
-.git
+AGENTS.md
+CLAUDE.md
+
+# IFC source model (the converted GLBs in public/models are what the app serves)
+src/data
