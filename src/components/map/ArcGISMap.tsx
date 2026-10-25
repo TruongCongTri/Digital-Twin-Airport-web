@@ -20,9 +20,8 @@ import type PointSymbol3D from "@arcgis/core/symbols/PointSymbol3D";
 import type ObjectSymbol3DLayer from "@arcgis/core/symbols/ObjectSymbol3DLayer";
 import type Camera from "@arcgis/core/Camera";
 
-// Loaded with this lazy (ssr: false) chunk instead of globals.css, so the 340KB
-// ArcGIS theme no longer blocks the first paint of the rest of the UI.
-import "@arcgis/core/assets/esri/themes/light/main.css";
+// The ArcGIS theme CSS is injected from the CDN by arcgis-modules, so the 340KB
+// stylesheet never blocks the first paint of the rest of the UI.
 import { loadArcGISModules } from "./arcgis-modules";
 
 import type { Plane, Sensor, TooltipData, Vehicle } from "@/types";
