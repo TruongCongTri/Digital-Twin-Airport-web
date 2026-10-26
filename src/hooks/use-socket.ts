@@ -8,6 +8,7 @@ import type {
   VehicleStatus,
 } from "@/types";
 import { toast } from "sonner";
+import { mapFlight } from "../lib/api-client";
 
 interface FlightTelemetryPayload {
   id: string;
@@ -48,6 +49,7 @@ export function useSocket() {
   const updateVehicleTelemetryBatch = useAirportStore(
     (state) => state.updateVehicleTelemetryBatch,
   );
+  const applyFlightUpdate = useAirportStore((state) => state.applyFlightUpdate);
   const setSimulationMode = useAirportStore((state) => state.setSimulationMode);
   const setConnection = useAirportStore((state) => state.setConnection);
   const updateAIForecastBatch = useAirportStore(
@@ -97,6 +99,15 @@ export function useSocket() {
       }));
       updatePlaneTelemetryBatch(mappedBatch);
     });
+
+    // Status / stand changes (ATC pipeline, departures): telemetry alone never says a
+    // flight was recycled, put on approach or left the airport
+    socket.on(
+      "flight:status-changed",
+      (raw: Parameters<typeof mapFlight>[0]) => {
+        applyFlightUpdate(mapFlight(raw));
+      },
+    );
 
     // 4. SENSORS (batched: one store update per tick for all sensors)
     socket.on("sensors:telemetry:batch", (batch: SensorTelemetryPayload[]) => {
@@ -152,6 +163,7 @@ export function useSocket() {
     updateSensorTelemetry,
     updateSensorTelemetryBatch,
     updateVehicleTelemetryBatch,
+    applyFlightUpdate,
     setSimulationMode,
     setConnection,
     updateAIForecastBatch,

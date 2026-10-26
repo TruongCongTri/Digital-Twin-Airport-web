@@ -40,6 +40,7 @@ import {
 import { loadBimManifest } from "@/src/lib/bim-manifest";
 import { onMapCommand } from "@/src/lib/map-commands";
 import { useViewportOcclusion } from "@/src/components/twin/map/useViewportOcclusion";
+import { isPlaneOffAirport } from "@/src/lib/flight-location";
 
 type CoordPoint = { lat: number; lng: number };
 const toRing = (area: CoordPoint[]) => area.map((p) => [p.lng, p.lat]);
@@ -48,16 +49,6 @@ interface WatchHandle {
   remove: () => void;
 }
 
-const AIRBORNE_STATUSES = [
-  "AIRBORNE",
-  "EN_ROUTE",
-  "EN ROUTE",
-  "IN_AIR",
-  "IN AIR",
-  "APPROACHING",
-  "DEPARTED",
-  "SCHEDULED",
-];
 const HOME_ORIGINS = ["SGN", "VVTS", "HO CHI MINH", "LONG THANH"];
 const OUTBOUND_STATUSES = ["PUSHBACK", "DEPARTED", "SCHEDULED", "BOARDING"];
 const INBOUND_STATUSES = ["APPROACHING", "LANDED"];
@@ -67,7 +58,7 @@ const isPlaneOnGround = (plane: Plane) => {
   const status = (plane.status || "").toUpperCase();
   const direction = (plane.direction || "").toUpperCase();
   if (!direction || direction === "UNKNOWN") return false;
-  if (AIRBORNE_STATUSES.includes(status)) return false;
+  if (isPlaneOffAirport({ status: status as Plane["status"] })) return false;
   if (typeof plane.altitude === "number" && plane.altitude > 100) return false;
   return true;
 };
@@ -85,6 +76,13 @@ const getLon = (e: { position?: { longitude?: number } }) =>
   e.position?.longitude ?? 0;
 const getLat = (e: { position?: { latitude?: number } }) =>
   e.position?.latitude ?? 0;
+
+// Badge point for an off-airport flight: its API anchor, or the airport centre when an
+// older API sent no anchor (never Null Island)
+const offAirportPoint = (plane: Plane, airport: AirportConfig) =>
+  getLon(plane) || getLat(plane)
+    ? { lon: getLon(plane), lat: getLat(plane) }
+    : { lon: airport.center.lng, lat: airport.center.lat };
 
 // Home camera per airport: BIM airports open closer and tilted to read the building
 const homeCamera = (airport: AirportConfig) => ({
@@ -235,8 +233,34 @@ export function ArcGISMap() {
       const CameraClass = CameraRef.current;
       if (!view || view.destroyed || !view.ready || !CameraClass) return;
       const store = useAirportStore.getState();
-      const framing =
-        FRAMING[getAirportConfig(store.activeAirport).model ? "bim" : "site"];
+      const airport = getAirportConfig(store.activeAirport);
+      const framing = FRAMING[airport.model ? "bim" : "site"];
+
+      // In the air / not yet arrived: show the airport rather than chasing the aircraft
+      // somewhere else on the globe. Frame the terminal and the badge anchor (a runway
+      // end, often kilometres away) together so both stay on screen.
+      const selectedPlane = store.getSelectedPlane();
+      if (selectedPlane && isPlaneOffAirport(selectedPlane)) {
+        const anchor = offAirportPoint(selectedPlane, airport);
+        const centre = airport.center;
+        const dNorth = (anchor.lat - centre.lat) * METRES_PER_DEG;
+        const dEast =
+          (anchor.lon - centre.lng) *
+          METRES_PER_DEG *
+          Math.cos((centre.lat * Math.PI) / 180);
+        const pose = lookAtPose(
+          (anchor.lon + centre.lng) / 2,
+          (anchor.lat + centre.lat) / 2,
+          0,
+          Math.max(framing.plane.distance * 3, Math.hypot(dNorth, dEast) * 1.6),
+          55,
+          view.camera.heading || 0,
+        );
+        view
+          .goTo(new CameraClass(pose), { duration, easing: "ease-in-out" })
+          .catch(() => undefined);
+        return;
+      }
 
       let target: {
         lon: number;
@@ -311,9 +335,20 @@ export function ArcGISMap() {
         store.mapFilters["planes"] !== false &&
         store.mapFilters["tooltips_planes"] !== false
       ) {
+        const airport = getAirportConfig(store.activeAirport);
         store.planes.forEach((plane) => {
-          if (!isPlaneOnGround(plane)) return;
-          const screen = toScreen(getLon(plane), getLat(plane), 15);
+          let lon = getLon(plane);
+          let lat = getLat(plane);
+          if (!isPlaneOnGround(plane)) {
+            // Off-airport flights get a badge only, and only while selected
+            if (
+              plane.id !== store.selectedEntityId ||
+              !isPlaneOffAirport(plane)
+            )
+              return;
+            ({ lon, lat } = offAirportPoint(plane, airport));
+          }
+          const screen = toScreen(lon, lat, 15);
           if (screen)
             raw.push({
               entityId: plane.id,
@@ -883,10 +918,19 @@ export function ArcGISMap() {
   ]);
 
   // --- Camera: follow the selected plane / vehicle as it moves ---
+  // Off-airport flights are framed once (airport view), so the user can move around freely
+  const framedOffAirportRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isMapReady || isImmersiveActive || !selectedEntityId) return;
     if (selectedEntityType !== "plane" && selectedEntityType !== "vehicle")
       return;
+    const plane = planes.find((p) => p.id === selectedEntityId);
+    if (plane && isPlaneOffAirport(plane)) {
+      if (framedOffAirportRef.current === selectedEntityId) return;
+      framedOffAirportRef.current = selectedEntityId;
+    } else {
+      framedOffAirportRef.current = null;
+    }
     focusSelection(1500);
   }, [
     selectedEntityId,

@@ -13,6 +13,7 @@ import type {
   VehicleStatus,
   VehicleType, // ✅ Added VehicleStatus export
 } from "@/types"; // Make sure Vehicle and VehicleStatus are exported from your types file, or import from store
+import { isPlaneOffAirport } from "./flight-location";
 
 export const apiClient = axios.create({
   baseURL:
@@ -56,7 +57,63 @@ interface RawFlight {
   parkingStand: RawParkingStand | null;
   imageUrl?: string;
   logoUrl?: string;
+  // Set by the API for flights in the air / not yet arrived (older APIs omit it)
+  onAirport?: boolean;
+  anchor?: { lat: number; lng: number } | null;
 }
+
+/** REST / `flight:status-changed` flight row -> Plane. */
+export const mapFlight = (item: RawFlight): Plane => {
+  const anchor = item.anchor
+    ? { longitude: item.anchor.lng, latitude: item.anchor.lat, z: 0 }
+    : null;
+  const status = item.status as PlaneStatus;
+  // Off-airport flights sit at their anchor, not at the stand they are assigned to
+  const position =
+    anchor && isPlaneOffAirport({ status })
+      ? anchor
+      : item.parkingStand
+        ? {
+            longitude: item.parkingStand.x,
+            latitude: item.parkingStand.y,
+            z: item.parkingStand.z || 0,
+          }
+        : (anchor ?? { longitude: 0, latitude: 0, z: 0 });
+
+  return {
+    id: item.id,
+    flightNumber: item.flightNumber,
+    callsign: item.flightNumber,
+    airline: item.airline,
+    origin: item.origin,
+    destination: item.destination,
+    status,
+    direction: item.direction as PlaneDirection,
+    assignedRunway: item.assignedRunway || null,
+    parkingStandId: item.parkingStandId || null,
+    parkingStand: item.parkingStand
+      ? {
+          id: item.parkingStand.id,
+          code: item.parkingStand.code,
+          x: item.parkingStand.x,
+          y: item.parkingStand.y,
+          z: item.parkingStand.z,
+          isOccupied: item.parkingStand.isOccupied,
+          zoneId: item.parkingStand.zoneId,
+        }
+      : null,
+
+    speed: 0,
+    altitude: 0,
+    heading: 0,
+    position,
+    anchor,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    imageUrl: item.imageUrl,
+    logoUrl: item.logoUrl,
+  };
+};
 
 // ✅ Updated to match the new civilian traffic backend schema
 interface RawVehicle {
@@ -306,49 +363,7 @@ export const fetchInitialTelemetry = async (airportId: string) => {
     };
   });
 
-  const mappedFlights: Plane[] = rawFlights.map((item: RawFlight) => {
-    let fallbackPosition = { longitude: 0, latitude: 0, z: 0 };
-    if (item.parkingStand) {
-      fallbackPosition = {
-        longitude: item.parkingStand.x,
-        latitude: item.parkingStand.y,
-        z: item.parkingStand.z || 0,
-      };
-    }
-
-    return {
-      id: item.id,
-      flightNumber: item.flightNumber,
-      callsign: item.flightNumber,
-      airline: item.airline,
-      origin: item.origin,
-      destination: item.destination,
-      status: item.status as PlaneStatus,
-      direction: item.direction as PlaneDirection,
-      assignedRunway: item.assignedRunway || null,
-      parkingStandId: item.parkingStandId || null,
-      parkingStand: item.parkingStand
-        ? {
-            id: item.parkingStand.id,
-            code: item.parkingStand.code,
-            x: item.parkingStand.x,
-            y: item.parkingStand.y,
-            z: item.parkingStand.z,
-            isOccupied: item.parkingStand.isOccupied,
-            zoneId: item.parkingStand.zoneId,
-          }
-        : null,
-
-      speed: 0,
-      altitude: 0,
-      heading: 0,
-      position: fallbackPosition,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-      imageUrl: item.imageUrl,
-      logoUrl: item.logoUrl,
-    };
-  });
+  const mappedFlights: Plane[] = rawFlights.map(mapFlight);
 
   // ✅ 5. Map Raw Vehicle Data
   const mappedVehicles: Vehicle[] = rawVehicles.map((item: RawVehicle) => ({

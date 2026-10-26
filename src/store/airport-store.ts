@@ -1,5 +1,6 @@
 "use client";
 import { create } from "zustand";
+import { isPlaneOffAirport } from "../lib/flight-location";
 import type {
   AppState,
   EntityType,
@@ -69,6 +70,7 @@ interface AirportStore {
 
   // High Speed Socket Handlers
   updatePlaneTelemetryBatch: (telemetryBatch: Partial<Plane>[]) => void;
+  applyFlightUpdate: (plane: Plane) => void;
   updateVehicleTelemetryBatch: (telemetryBatch: Partial<Vehicle>[]) => void;
   updateSensorTelemetry: (id: string, value: number, status?: string) => void;
   updateSensorTelemetryBatch: (
@@ -257,6 +259,38 @@ export const useAirportStore = create<AirportStore>((set, get) => ({
 
       if (!hasChanges) return state;
 
+      return {
+        planes: updatedPlanes,
+        metrics: {
+          ...state.metrics,
+          activeFlights: getActiveFlightCount(updatedPlanes),
+        },
+      };
+    }),
+
+  // Status / stand change pushed by the API (ATC pipeline, departures, admin overrides).
+  // Live telemetry keeps owning the position of aircraft on the airport.
+  applyFlightUpdate: (plane) =>
+    set((state) => {
+      const idx = state.planes.findIndex((p) => p.id === plane.id);
+      if (idx < 0) return state; // another airport's flight
+      const existing = state.planes[idx];
+      const offAirport = isPlaneOffAirport(plane);
+      const updatedPlanes = [...state.planes];
+      updatedPlanes[idx] = {
+        ...existing,
+        status: plane.status,
+        direction: plane.direction,
+        parkingStandId: plane.parkingStandId,
+        parkingStand: plane.parkingStand,
+        anchor: plane.anchor,
+        ...(offAirport && {
+          position: plane.position,
+          speed: 0,
+          altitude: 0,
+          path: [],
+        }),
+      };
       return {
         planes: updatedPlanes,
         metrics: {

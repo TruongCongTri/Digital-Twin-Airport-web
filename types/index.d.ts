@@ -148,6 +148,8 @@ export interface Plane {
   updatedAt?: string;
   imageUrl?: string;
   logoUrl?: string;
+  // Where the map pins an off-airport flight (see src/lib/flight-location.ts)
+  anchor?: MapPoint | null;
 }
 
 export interface SensorReading {

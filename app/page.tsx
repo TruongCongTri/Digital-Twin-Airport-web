@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { X } from "lucide-react";
 import { useAirportStore } from "@/src/store/airport-store";
 import { useUIStore } from "@/src/store/useUIStore";
-import { PlaneFocusPanel } from "@/src/components/panels/PlaneFocusPanel";
 import { VehicleFocusPanel } from "@/src/components/panels/VehicleFocusPanel";
 import { preloadArcGIS } from "@/src/components/map/arcgis-modules";
 import { AppHeader } from "@/src/components/twin/layout/AppHeader";
@@ -20,6 +19,7 @@ import {
 } from "@/src/components/twin/map/ViewportControls";
 import { useAttributionInset } from "@/src/components/twin/map/useAttributionInset";
 import { SensorAnalyticsPanel } from "@/src/components/twin/sensors/SensorAnalyticsPanel";
+import { PlaneAnalyticsPanel } from "@/src/components/twin/assets/PlaneAnalyticsPanel";
 import {
   OperationsAnalytics,
   OperationsOverview,
@@ -47,6 +47,7 @@ export default function HomePage() {
   const selectedEntityId = useAirportStore((s) => s.selectedEntityId);
   const selectedEntityType = useAirportStore((s) => s.selectedEntityType);
   const selectedSensor = useAirportStore((s) => s.getSelectedSensor());
+  const selectedPlane = useAirportStore((s) => s.getSelectedPlane());
   const isDashboardOpen = useAirportStore((s) => s.isDashboardOpen);
   const explorerOpen = useUIStore((s) => s.explorerOpen);
   const analyticsOpen = useUIStore((s) => s.analyticsOpen);
@@ -57,10 +58,10 @@ export default function HomePage() {
   const showAnalytics = analyticsOpen && !!selectedEntityId;
   const sensorAnalytics =
     showAnalytics && selectedEntityType === "sensor" && !!selectedSensor;
-  // Aircraft / vehicle deep-dives still float over the viewport (view padding keeps the focus visible)
-  const floatingAnalytics =
-    showAnalytics &&
-    (selectedEntityType === "plane" || selectedEntityType === "vehicle");
+  const planeAnalytics =
+    showAnalytics && selectedEntityType === "plane" && !!selectedPlane;
+  // Vehicle deep-dives still float over the viewport (view padding keeps the focus visible)
+  const floatingAnalytics = showAnalytics && selectedEntityType === "vehicle";
 
   // Analytics belongs to a selection; drop it when the selection goes away
   useEffect(() => {
@@ -97,8 +98,7 @@ export default function HomePage() {
                 data-viewport-overlay
                 className="absolute inset-0 pointer-events-none"
               >
-                {selectedEntityType === "plane" && <PlaneFocusPanel />}
-                {selectedEntityType === "vehicle" && <VehicleFocusPanel />}
+                <VehicleFocusPanel />
               </div>
               <Button
                 variant="solid"
@@ -117,6 +117,8 @@ export default function HomePage() {
           <OperationsAnalytics />
         ) : sensorAnalytics ? (
           <SensorAnalyticsPanel sensor={selectedSensor!} />
+        ) : planeAnalytics ? (
+          <PlaneAnalyticsPanel plane={selectedPlane!} />
         ) : (
           selectedEntityId && !floatingAnalytics && <InspectorPanel />
         )}
