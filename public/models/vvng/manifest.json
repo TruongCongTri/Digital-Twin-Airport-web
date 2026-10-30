@@ -1,0 +1,30 @@
+{
+  "source": "nhà gaaa.ifc",
+  "schema": "IFC2X3",
+  "storeys": [
+    {
+      "id": "site",
+      "name": "Site",
+      "elevation": 0,
+      "file": "site.glb",
+      "triangles": 50805,
+      "bytes": 922076
+    },
+    {
+      "id": "level-1",
+      "name": "Level 1",
+      "elevation": 0,
+      "file": "level-1.glb",
+      "triangles": 9726,
+      "bytes": 158708
+    },
+    {
+      "id": "level-2",
+      "name": "Level 2",
+      "elevation": 4.000000000000001,
+      "file": "level-2.glb",
+      "triangles": 3808,
+      "bytes": 48412
+    }
+  ]
+}

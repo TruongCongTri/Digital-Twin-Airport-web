@@ -2,6 +2,7 @@
 // coordinate constants) and it appears in the pickers, map, panels and heatmaps.
 import { LONG_THANH_COORDS, TAN_SON_NHAT_COORDS } from "./airport-coordinate";
 import { GREEN_AIRPORT_COORDS } from "./green-airport-coordinates";
+import { NHA_GA_COORDS } from "./nha-ga-coordinates";
 
 type LatLng = { lat: number; lng: number };
 
@@ -87,6 +88,22 @@ export const AIRPORTS: AirportConfig[] = [
       GREEN_AIRPORT_COORDS.APRON.area,
       GREEN_AIRPORT_COORDS.RUNWAYS.RWY_07R_25L.area,
       GREEN_AIRPORT_COORDS.RUNWAYS.RWY_06L_24R.area,
+    ],
+  },
+  {
+    id: NHA_GA_COORDS.CODE,
+    code: "NGA",
+    name: "Nha Ga",
+    fullName: NHA_GA_COORDS.NAME,
+    center: NHA_GA_COORDS.CENTER,
+    terminalAreas: [NHA_GA_COORDS.SITE.area],
+    runwayAreas: [NHA_GA_COORDS.RUNWAYS.RWY_07_25.area],
+    routeGroups: [NHA_GA_COORDS.ROUTES.WEST, NHA_GA_COORDS.ROUTES.EAST],
+    iotVlan: 8,
+    model: NHA_GA_COORDS.MODEL,
+    pavedAreas: [
+      ...NHA_GA_COORDS.AIRSIDE.areas,
+      NHA_GA_COORDS.RUNWAYS.RWY_07_25.area,
     ],
   },
 ];

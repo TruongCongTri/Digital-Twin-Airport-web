@@ -40,7 +40,7 @@ docker build --build-arg NEXT_PUBLIC_API_URL=https://api.example.com/api/v1 -t d
 docker run -p 3000:3000 digital-twin-airport-web
 ```
 
-Make sure the API's `CLIENT_URL` includes this app's origin (CORS and Socket.IO). BIM models in `public/models` are served by the app itself; regenerate them from the IFC with `npm run ifc:glb` in the API repo.
+Make sure the API's `CLIENT_URL` includes this app's origin (CORS and Socket.IO). BIM models in `public/models` are served by the app itself; regenerate them from the IFC with `npm run ifc:glb` (VVGA) or `npm run ifc:glb:vvng` (VVNG) in the API repo.
 
 **ArcGIS is loaded from the Esri CDN, not bundled.** `src/components/map/arcgis-modules.ts` injects `https://js.arcgis.com/5.0/core.js` (and the light theme CSS) at runtime and loads classes with `$arcgis.import`. Bundling `@arcgis/core` used to take ~12 min and emit ~5,000 chunks (~310MB), which free-tier builders (Vercel Hobby, Render free) could not finish; the build now takes well under a minute. `@arcgis/core` and `@esri/calcite-components` are devDependencies used for `import type` only, so:
 

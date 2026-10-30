@@ -43,7 +43,8 @@ export function StatusBar() {
           title={manifest.source}
         >
           <Boxes size={12} />
-          IFC4 · {manifest.storeys.length} storeys · {manifest.source}
+          {manifest.schema ?? "IFC4"} · {manifest.storeys.length} storeys ·{" "}
+          {manifest.source}
         </span>
       )}
       <span className="flex-1" />

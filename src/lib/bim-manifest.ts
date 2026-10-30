@@ -12,6 +12,7 @@ export interface BimStorey {
 
 export interface BimManifest {
   source: string;
+  schema?: string; // e.g. IFC2X3; older manifests omit it (IFC4)
   storeys: BimStorey[];
 }
 
